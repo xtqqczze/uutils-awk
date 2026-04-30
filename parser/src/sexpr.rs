@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Formatter, Result};
 
-use crate::ast::{Atom, Body, Identifier, Statement, Variable};
+use crate::ast::{Atom, Body, Expr, Identifier, Statement, Variable};
 
 const PRETTY_PRINT_INDENT: usize = 2;
 
@@ -30,19 +30,14 @@ impl Debug for Statement<'_> {
                     if alt {
                         write!(
                             f,
-                            "(redir {rx:?}\n{pad}({name:?}{:#width$?}))",
+                            "(redir {rx:?}\n{pad}({name:?}{:#ni$?}))",
                             ListLispFmt(args),
-                            width = ni
                         )
                     } else {
                         write!(f, "(redir {rx:?} ({name:?}{:?}))", ListLispFmt(args))
                     }
                 } else {
-                    if alt {
-                        write!(f, "({name:?}{:#width$?})", ListLispFmt(args), width = ni)
-                    } else {
-                        write!(f, "({name:?}{:?}", ListLispFmt(args))
-                    }
+                    write!(f, "({name:?}{:?})", ListLispFmt(args))
                 }
             }
             Self::If {
@@ -54,14 +49,18 @@ impl Debug for Statement<'_> {
                     write!(f, "(if {condition:?}\n{pad}")?;
                     write!(f, "{then_body:#ni$?}")?;
                     if let Some(else_body) = else_body {
-                        write!(f, "\n{pad}Some({else_body:#ni$?})")
+                        write!(
+                            f,
+                            "\n{}(else\n{pad}{else_body:#ni$?}))",
+                            &pad[PRETTY_PRINT_INDENT..],
+                        )
                     } else {
-                        write!(f, "\n{pad}None)")
+                        write!(f, ")")
                     }
                 } else if let Some(else_body) = else_body {
-                    write!(f, "(if {condition:?} {then_body:?} Some({else_body:?})")
+                    write!(f, "(if {condition:?} {then_body:?} (else {else_body:?}))")
                 } else {
-                    write!(f, "(if {condition:?} {then_body:?} None)")
+                    write!(f, "(if {condition:?} {then_body:?})")
                 }
             }
             Self::While {
@@ -91,10 +90,18 @@ impl Debug for Statement<'_> {
                 body,
             } => {
                 if alt {
-                    write!(
-                        f,
-                        "(for\n{pad}{init:?}\n{pad}{condition:?}\n{pad}{update:?}\n{pad}{body:#ni$?})"
-                    )
+                    write!(f, "(for")?;
+                    let write_fragment = |f: &mut Formatter, x: &Option<Expr>| {
+                        if let Some(x) = x {
+                            write!(f, "\n{pad}{x:?}")
+                        } else {
+                            write!(f, "\n{pad}None")
+                        }
+                    };
+                    write_fragment(f, init)?;
+                    write_fragment(f, condition)?;
+                    write_fragment(f, update)?;
+                    write!(f, "\n{pad}{body:#ni$?})")
                 } else {
                     write!(f, "(for {init:?} {condition:?} {update:?} {body:?})")
                 }
@@ -115,9 +122,9 @@ impl Debug for Statement<'_> {
                     if let Some((dx, i)) = default {
                         write!(
                             f,
-                            "(switch {scrutinee:?}\n{pad}(cases{:#width$?})\n{pad}Some({dx:?}) {i})",
+                            "(switch {scrutinee:?}{:#ni$?}\n{pad}(default {i}\n{pad}  {dx:#width$?}))",
                             ListLispCasesFmt(branches.as_slice()),
-                            width = ni
+                            width = ni + PRETTY_PRINT_INDENT,
                         )
                     } else {
                         write!(
@@ -131,27 +138,18 @@ impl Debug for Statement<'_> {
                     if let Some((dx, i)) = default {
                         write!(
                             f,
-                            "(switch {scrutinee:?} (cases{:?}) Some({dx:?}) {i})",
+                            "(switch {scrutinee:?}{:?} (default {i} {dx:?}))",
                             ListLispCasesFmt(branches.as_slice())
                         )
                     } else {
-                        write!(
-                            f,
-                            "(switch {scrutinee:?} (cases{:?}))",
-                            ListLispCasesFmt(branches)
-                        )
+                        write!(f, "(switch {scrutinee:?}{:?})", ListLispCasesFmt(branches))
                     }
                 }
             }
             Self::Continue => write!(f, "(continue)"),
             Self::Break => write!(f, "(break)"),
-            Self::Return(expr) => {
-                if alt {
-                    write!(f, "(return {expr:#ni$?})")
-                } else {
-                    write!(f, "(return {expr:?})")
-                }
-            }
+            Self::Return(Some(expr)) => write!(f, "(return {expr:?})"),
+            Self::Return(None) => write!(f, "(return)"),
         }
     }
 }
@@ -175,16 +173,16 @@ struct ListLispCasesFmt<'a, T: Debug>(&'a [(T, Body<'a>)]);
 impl<T: Debug> Debug for ListLispCasesFmt<'_, T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         let (alt, ni, pad) = fmt_vars(f);
+        let (ni, pad) = (ni - PRETTY_PRINT_INDENT, &pad[PRETTY_PRINT_INDENT..]);
         for (i, e) in self.0 {
             if alt {
                 write!(
                     f,
-                    "\n{pad}(case {i:?}\n{pad}  {:#width$?})",
-                    e,
+                    "\n{pad}(case {i:?}\n{pad}  {e:#width$?})",
                     width = ni + PRETTY_PRINT_INDENT
                 )?;
             } else {
-                write!(f, " (case {i:?} {e:?}")?;
+                write!(f, " (case {i:?} {e:?})")?;
             }
         }
         Ok(())
