@@ -1,3 +1,8 @@
+// This file is part of the uutils awk package.
+//
+// For the full copyright and license information, please view the LICENSE
+// files that was distributed with this source code.
+
 use std::fmt::{Debug, Display};
 use std::panic::{UnwindSafe, catch_unwind, set_hook, take_hook};
 use std::process::exit;
