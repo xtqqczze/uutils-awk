@@ -9,7 +9,7 @@ mod utils;
 
 use bumpalo::Bump;
 use color_eyre::Result;
-use parser::{Lexer, Parser};
+use parser::Parser;
 
 use crate::utils::{ensure_consistent_panic, exit_err};
 

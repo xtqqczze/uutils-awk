@@ -1,4 +1,4 @@
-use ariadne::{Color, ColorGenerator, Fmt, Label, Report, ReportKind, Source};
+use ariadne::{Color, Label, Report, ReportKind, Source};
 use lexer::{LexingError, Span};
 use thiserror::Error;
 
@@ -135,7 +135,7 @@ pub fn report_error<'a>(
     error: ParsingError,
     name: &'a str,
     source: &'a [u8],
-) -> (Report<'a, (&'a str, Span)>, Source<&'a str>) {
+) -> super::AriadneErr<'a> {
     let span = error.span().unwrap();
     let source = str::from_utf8(source).unwrap();
     let mut report = Report::build(ReportKind::Error, (name, span.clone()))
@@ -148,5 +148,5 @@ pub fn report_error<'a>(
     if let Some(str) = error.hint() {
         report.set_help(str);
     }
-    (report.finish(), Source::from(source))
+    (Box::new(report.finish()), Source::from(source))
 }

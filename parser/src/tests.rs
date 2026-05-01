@@ -1,4 +1,4 @@
-use std::{convert::identity, fmt::Debug};
+use std::fmt::Debug;
 
 use bumpalo::Bump;
 

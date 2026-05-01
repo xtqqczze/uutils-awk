@@ -46,6 +46,11 @@ impl From<LexingError> for ParsingError {
     }
 }
 
+type AriadneErr<'a> = (
+    Box<ariadne::Report<'a, (&'a str, Span)>>,
+    ariadne::Source<&'a str>,
+);
+
 impl<'a> Parser<'a> {
     #[tracing::instrument]
     pub fn new(arena: &'a Bump) -> Self {
@@ -59,17 +64,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse(
-        &mut self,
-        name: &'a str,
-        source: &'a [u8],
-    ) -> Result<
-        &Ast<'a>,
-        (
-            ariadne::Report<'a, (&'a str, Span)>,
-            ariadne::Source<&'a str>,
-        ),
-    > {
+    pub fn parse(&mut self, name: &'a str, source: &'a [u8]) -> Result<&Ast<'a>, AriadneErr<'a>> {
         let source = self.arena.alloc_slice_copy(source);
         self.current_file = name;
         let mut lex = Lexer::new(source);
