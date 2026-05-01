@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use bumpalo::{Bump, collections::Vec};
 use either::Either;
 use hashbrown::{DefaultHashBuilder, HashMap};
-use lexer::{Slice, Token};
+use lexer::{Slice, Span, Token};
 
 use crate::{ParsingError, Result, lex::TokenExt};
 
@@ -274,24 +274,23 @@ impl From<f64> for Atom<'_> {
     }
 }
 
-impl<'a> TryFrom<&Token<'a>> for UnaryOperator {
-    type Error = ParsingError;
-
-    fn try_from(value: &Token<'a>) -> Result<Self> {
+impl<'a> UnaryOperator {
+    pub fn parse(value: &Token<'a>, span: &Span) -> Result<Self> {
         match value {
             Token::Record => Ok(Self::Record),
             Token::Negation => Ok(Self::Negation),
             Token::Plus => Ok(Self::ToInt),
             Token::Minus => Ok(Self::Negative),
-            _ => Err(ParsingError::UnexpectedToken),
+            _ => Err(ParsingError::UnexpectedToken(
+                span.clone(),
+                "expected an unary operator.".into(),
+            )),
         }
     }
 }
 
-impl<'a> TryFrom<&Token<'a>> for BinaryOperator {
-    type Error = ParsingError;
-
-    fn try_from(value: &Token<'a>) -> Result<Self> {
+impl<'a> BinaryOperator {
+    pub fn parse(value: &Token<'a>, span: &Span) -> Result<Self> {
         match value {
             Token::EqualTo => Ok(Self::Eq),
             Token::NotEqualTo => Ok(Self::NEq),
@@ -306,15 +305,16 @@ impl<'a> TryFrom<&Token<'a>> for BinaryOperator {
             Token::Star => Ok(Self::Multiply),
             Token::Slash => Ok(Self::Divide),
             t if t.is_expr_start() => Ok(Self::Concat),
-            _ => Err(ParsingError::UnexpectedToken),
+            _ => Err(ParsingError::UnexpectedToken(
+                span.clone(),
+                "expected a binary operator.".into(),
+            )),
         }
     }
 }
 
-impl<'a> TryFrom<&Token<'a>> for PlaceOperator {
-    type Error = ParsingError;
-
-    fn try_from(value: &Token<'a>) -> Result<Self> {
+impl<'a> PlaceOperator {
+    pub fn parse(value: &Token<'a>, span: &Span) -> Result<Self> {
         match value {
             Token::Assignment
             | Token::PlusAssign
@@ -325,7 +325,10 @@ impl<'a> TryFrom<&Token<'a>> for PlaceOperator {
             | Token::PercentAssign => Ok(Self::Assignment),
             Token::OpenBracket => Ok(Self::ArrayAccess),
             Token::In => Ok(Self::InArray),
-            _ => Err(ParsingError::UnexpectedToken),
+            _ => Err(ParsingError::UnexpectedToken(
+                span.clone(),
+                "expected a place operator.".into(),
+            )),
         }
     }
 }

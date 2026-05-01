@@ -1,4 +1,4 @@
-use std::fmt::{Debug, Formatter, Result};
+use std::fmt::{Debug, Display, Formatter, Result};
 
 use crate::ast::{Atom, Body, Expr, Identifier, Statement, Variable};
 
@@ -195,6 +195,12 @@ impl Debug for Identifier<'_> {
     }
 }
 
+impl Display for Identifier<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        <&str as Display>::fmt(&self.literal, f)
+    }
+}
+
 impl Debug for Body<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         let (alt, ni, pad) = fmt_vars(f);
@@ -225,7 +231,7 @@ impl Debug for Atom<'_> {
 impl Debug for Variable<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self {
-            Self::User(ident) => ident.fmt(f),
+            Self::User(ident) => <Identifier as Debug>::fmt(ident, f),
             Self::Nr => write!(f, "NR"),
             Self::Nf => write!(f, "NF"),
             Self::Fs => write!(f, "FS"),

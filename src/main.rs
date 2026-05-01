@@ -19,11 +19,15 @@ fn uu_main() -> Result<()> {
     let arg = std::env::args().nth(1).unwrap();
 
     let arena = Bump::with_capacity(4000); // 4KB minus metadata-ish
-    let mut lex = Lexer::new(arg.as_bytes());
     let mut parser = Parser::new(&arena);
-    let ast = dbg!(parser.parse(&mut lex, true).unwrap());
-    let arena2 = Bump::new();
-    arena2.alloc_with(|| ast.clone());
+    let ast = match parser.parse("CLI", arg.as_bytes()) {
+        Ok(ast) => dbg!(ast),
+        Err((report, source)) => {
+            report.eprint(("CLI", source)).unwrap();
+            return Ok(());
+        }
+    };
+    println!("{:?}", ast.rules);
     dbg!(arena.chunk_capacity());
 
     // for token in lex {

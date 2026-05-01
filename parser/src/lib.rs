@@ -1,14 +1,16 @@
 mod ast;
+mod diagnostics;
 mod lex;
 mod sexpr;
+#[cfg(test)]
+mod tests;
 
 use std::{fmt::Debug, mem::replace};
 
 use bumpalo::{Bump, collections::Vec, vec};
 use either::Either::{Left, Right};
 use hashbrown::HashMap;
-use lexer::{LexingError, Token};
-use thiserror::Error;
+use lexer::{LexingError, Span, Token};
 
 pub use crate::ast::Ast;
 pub use crate::lex::Lexer;
@@ -18,6 +20,7 @@ use crate::{
         Identifier, Pattern, PlaceOperator, Rule, RulePattern, SpecialPattern, Statement, Ternary,
         UnaryOperator, Variable,
     },
+    diagnostics::{ParsingError, report_error},
     lex::TokenExt,
 };
 
@@ -27,20 +30,9 @@ pub struct Parser<'a> {
     ast: Ast<'a>,
     arena: &'a Bump,
     preprocessor: Preprocessor,
+    current_file: &'a str,
     namespace: &'a str,
     concurrent: bool,
-}
-
-#[derive(Debug, Error, Clone)]
-pub enum ParsingError {
-    #[error("")]
-    LexingError(LexingError),
-    #[error("Unclosed scope.")]
-    UnclosedScope,
-    #[error("Unexpected token")]
-    UnexpectedToken,
-    #[error("Duplicated argument")]
-    DuplicatedArgument,
 }
 
 impl From<LexingError> for ParsingError {
@@ -56,13 +48,32 @@ impl<'a> Parser<'a> {
             ast: Ast::new(arena),
             arena,
             preprocessor: Preprocessor {},
+            current_file: "",
             namespace: "awk",
             concurrent: false,
         }
     }
 
+    pub fn parse(
+        &mut self,
+        name: &'a str,
+        source: &'a [u8],
+    ) -> Result<
+        &Ast<'a>,
+        (
+            ariadne::Report<'a, (&'a str, Span)>,
+            ariadne::Source<&'a str>,
+        ),
+    > {
+        let source = self.arena.alloc_slice_copy(source);
+        self.current_file = name;
+        let mut lex = Lexer::new(source);
+        let parsed = self.parse_top(&mut lex, true);
+        parsed.map_err(|error| report_error(error, name, source))
+    }
+
     #[tracing::instrument]
-    pub fn parse(&mut self, lex: &mut Lexer<'a>, awk_namespace: bool) -> Result<&Ast<'a>> {
+    fn parse_top(&mut self, lex: &mut Lexer<'a>, awk_namespace: bool) -> Result<&Ast<'a>> {
         // Expects:
         //   * Directive
         //     * Namespace: Either handle here or in interpreter; idk.
@@ -104,35 +115,41 @@ impl<'a> Parser<'a> {
                 match lex.expect_next()? {
                     Token::LoadDirective(lib) => {
                         self.ast.loads.push(lib);
-                        lex.expect_with(Token::is_stmnt_end)?;
+                        lex.expect_with(Token::is_stmnt_end, "expected statement end.".into())?;
                     }
                     Token::IncludeDirective(path) => {
                         let old_namespace = self.namespace;
                         let content = self.preprocessor.include_in(path.as_ref(), self.arena);
-                        self.parse(&mut Lexer::new(content), true)?;
-                        lex.expect_with(Token::is_stmnt_end)?;
+                        self.parse_top(&mut Lexer::new(content), true)?;
+                        lex.expect_with(Token::is_stmnt_end, "expected statement end.".into())?;
                         self.namespace = old_namespace;
                     }
                     Token::NsIncludeDirective(path) => {
                         let old_namespace = self.namespace;
                         let content = self.preprocessor.include_in(path.as_ref(), self.arena);
-                        self.parse(&mut Lexer::new(content), false)?;
-                        lex.expect_with(Token::is_stmnt_end)?;
+                        self.parse_top(&mut Lexer::new(content), false)?;
+                        lex.expect_with(Token::is_stmnt_end, "expected statement end.".into())?;
                         self.namespace = old_namespace;
                     }
                     Token::NamespaceDirective(namespace) => {
                         self.namespace = namespace;
-                        lex.expect_with(Token::is_stmnt_end)?;
+                        lex.expect_with(Token::is_stmnt_end, "expected statement end.".into())?;
                     }
                     Token::ConcurrentDirective => {
                         if lex.peek_with(|t| t.maps_to_special_pat().is_some()) || self.concurrent {
-                            return Err(ParsingError::UnexpectedToken);
+                            return Err(ParsingError::UnexpectedToken(
+                                lex.span(),
+                                "especified more than once.".into(),
+                            ));
                         }
                         self.concurrent = true;
                     }
                     Token::Function => self.parse_function(lex)?,
                     Token::Newline | Token::Semicolon if self.concurrent => {
-                        return Err(ParsingError::UnexpectedToken);
+                        return Err(ParsingError::UnexpectedToken(
+                            lex.span(),
+                            "a pattern was expected.".into(),
+                        ));
                     }
                     Token::Newline | Token::Semicolon => {}
                     x => unimplemented!("{x:?}"),
@@ -165,7 +182,7 @@ impl<'a> Parser<'a> {
     /// Parses up until `}`. Inserts a lone print statement if none.
     #[tracing::instrument]
     fn parse_body(&mut self, lex: &mut Lexer<'a>) -> Result<Body<'a>> {
-        lex.expect(&Token::OpenBrace)?;
+        lex.expect(&Token::OpenBrace, ParsingError::ExpectedOpeningBrace)?;
         let mut body = Vec::new_in(self.arena);
         let mut depth = 0;
 
@@ -186,7 +203,9 @@ impl<'a> Parser<'a> {
             } else if lex.peek().is_some() {
                 body.push(self.parse_statement(lex)?);
             } else {
-                break Err(ParsingError::UnclosedScope);
+                break Err(ParsingError::UnclosedScope(
+                    lex.peeked_span().unwrap_or_else(|_| lex.span()),
+                ));
             }
         }
     }
@@ -215,7 +234,7 @@ impl<'a> Parser<'a> {
                     // FIXME(trivial): parser differential w/ GNU: they treat
                     // for (ident in ident; expr; expr) as a syntax error.
                     // It seems like a bug to me.
-                    lex.expect(&Token::OpenParent)?;
+                    lex.expect(&Token::OpenParent, ParsingError::ExpectedOpeningParenthesis)?;
                     let init = (!lex.consume(&Token::Semicolon))
                         .then(|| self.parse_expression(lex))
                         .transpose()?;
@@ -236,9 +255,12 @@ impl<'a> Parser<'a> {
                             Expr::Leaf(Atom::Variable(array)),
                         ))) = init
                         else {
-                            return Err(ParsingError::UnexpectedToken);
+                            return Err(ParsingError::InvalidForLoop(lex.span()));
                         };
-                        lex.expect(&Token::ClosedParent)?;
+                        lex.expect(
+                            &Token::ClosedParent,
+                            ParsingError::UnclosedParenthesisInStatement,
+                        )?;
                         let body = self.parse_statement_body(lex)?;
                         Statement::ForEach {
                             place: *place,
@@ -249,7 +271,7 @@ impl<'a> Parser<'a> {
                 }
                 Token::Switch => {
                     let scrutinee = self.parse_parenthesized_expr(lex)?;
-                    lex.expect(&Token::OpenBrace)?;
+                    lex.expect(&Token::OpenBrace, ParsingError::ExpectedOpeningBrace)?;
                     let mut default = None;
                     let mut branches = Vec::new_in(self.arena);
                     let mut case = None;
@@ -272,9 +294,10 @@ impl<'a> Parser<'a> {
                             }
                             case = Some(Left(self.parse_case(lex)?));
                         } else if lex.consume(&Token::Default) {
-                            lex.expect(&Token::Colon)?;
+                            let span = lex.span();
+                            lex.expect(&Token::Colon, ParsingError::ColonMustFollowCase)?;
                             if default.is_some() || matches!(case, Some(Right(()))) {
-                                return Err(ParsingError::UnexpectedToken);
+                                return Err(ParsingError::DuplicatedDefaultBranch(span));
                             } else if let Some(Left(atom)) = case {
                                 branches.push((
                                     atom,
@@ -284,7 +307,7 @@ impl<'a> Parser<'a> {
                             case = Some(Right(()));
                         } else {
                             if case.is_none() {
-                                return Err(ParsingError::UnexpectedToken);
+                                return Err(ParsingError::MissingSwitchBranch(lex.span()));
                             }
                             let statement = self.parse_statement(lex)?;
                             body.push(statement);
@@ -312,7 +335,7 @@ impl<'a> Parser<'a> {
                 }
                 Token::Do => {
                     let then_body = self.parse_body(lex)?;
-                    lex.expect(&Token::While)?;
+                    lex.expect(&Token::While, ParsingError::MissingWhileAfterDo)?;
                     let condition = self.parse_parenthesized_expr(lex)?;
                     Statement::DoWhile {
                         then_body,
@@ -336,9 +359,15 @@ impl<'a> Parser<'a> {
 
     #[tracing::instrument]
     fn parse_parenthesized_expr(&mut self, lex: &mut Lexer<'a>) -> Result<Expr<'a>> {
-        lex.expect(&Token::OpenParent)?;
+        lex.expect(
+            &Token::OpenParent,
+            ParsingError::MissingParenthesisInStatement,
+        )?;
         let expr = self.parse_expression(lex)?;
-        lex.expect(&Token::ClosedParent)?;
+        lex.expect(
+            &Token::ClosedParent,
+            ParsingError::UnclosedParenthesisInStatement,
+        )?;
         Ok(expr)
     }
 
@@ -356,7 +385,7 @@ impl<'a> Parser<'a> {
             Ok(None)
         } else {
             let expr = self.parse_expression(lex)?;
-            lex.expect(&next)?;
+            lex.expect(&next, ParsingError::InvalidForLoop)?;
             Ok(Some(expr))
         }
     }
@@ -372,12 +401,12 @@ impl<'a> Parser<'a> {
 
     #[tracing::instrument]
     fn parse_case(&mut self, lex: &mut Lexer<'a>) -> Result<Atom<'a>> {
-        lex.expect(&Token::Case)?;
+        lex.expect(&Token::Case, ParsingError::MissingSwitchBranch)?;
         let next = lex.expect_next()?;
         let value = self.parse_atom(lex, next)?;
-        lex.expect(&Token::Colon)?;
+        lex.expect(&Token::Colon, ParsingError::ColonMustFollowCase)?;
         match value {
-            Atom::Variable(_) => Err(ParsingError::UnexpectedToken),
+            Atom::Variable(_) => Err(ParsingError::InvalidCaseValue(lex.span())),
             _ => Ok(value),
         }
     }
@@ -427,7 +456,7 @@ impl<'a> Parser<'a> {
     #[tracing::instrument]
     fn parse_function(&mut self, lex: &mut Lexer<'a>) -> Result<()> {
         let name = lex.expect_identifier()?.qualify(self.namespace);
-        let args = self.parse_signature(lex)?;
+        let args = self.parse_signature(lex, &name)?;
         let body = self.parse_body(lex)?;
 
         self.ast.functions.insert(name, Function { args, body });
@@ -435,9 +464,15 @@ impl<'a> Parser<'a> {
     }
 
     #[tracing::instrument]
-    fn parse_signature(&mut self, lex: &mut Lexer<'a>) -> Result<Vec<'a, Identifier<'a>>> {
+    fn parse_signature(
+        &mut self,
+        lex: &mut Lexer<'a>,
+        name: &Identifier<'a>,
+    ) -> Result<Vec<'a, Identifier<'a>>> {
         let mut args = Vec::new_in(self.arena);
-        lex.expect(&Token::OpenParent)?;
+        lex.expect(&Token::OpenParent, |s| {
+            ParsingError::NoFunctionSignature(s, name.to_string())
+        })?;
 
         if lex.consume(&Token::ClosedParent) {
             return Ok(args);
@@ -446,13 +481,19 @@ impl<'a> Parser<'a> {
         loop {
             let name = lex.expect_identifier()?.qualify(self.namespace);
             // Linear search is fine for the numbers we are working with.
-            if args.iter().any(|a| a == &name) {
-                return Err(ParsingError::DuplicatedArgument);
+            if let Some(arg) = args.iter().find(|&a| a == &name) {
+                return Err(ParsingError::DuplicatedArgument(
+                    lex.span(),
+                    name.to_string(),
+                    arg.to_string(),
+                ));
             }
             args.push(name);
 
             if !lex.consume(&Token::Comma) {
-                lex.expect(&Token::ClosedParent)?;
+                lex.expect(&Token::ClosedParent, |s| {
+                    ParsingError::FunctionCallMissingParenthesis(s, name.to_string())
+                })?;
                 break;
             }
         }
@@ -470,13 +511,16 @@ impl<'a> Parser<'a> {
         let mut lhs = if lex.consume(&Token::OpenParent) {
             let inner = self.parse_expression(lex)?;
 
-            lex.expect(&Token::ClosedParent)?;
+            lex.expect(
+                &Token::ClosedParent,
+                ParsingError::UnclosedParenthesisExpression,
+            )?;
             inner
         } else if lex.peek_with(Token::is_prefix_op) {
             let next = lex.expect_next()?;
             if let Some((op, bp)) = BinaryOperator::unfold_prefix(&next) {
                 let Expr::Leaf(Atom::Variable(rhs)) = self.parse_pratt_fragment(lex, bp)? else {
-                    return Err(ParsingError::UnexpectedToken);
+                    return Err(ParsingError::OperatorExpectsVariable(lex.span()));
                 };
                 Expr::node(
                     PlaceOperator::Assignment.expr(
@@ -485,12 +529,12 @@ impl<'a> Parser<'a> {
                     ),
                     self.arena,
                 )
-            } else if let Ok(op) = UnaryOperator::try_from(&next) {
+            } else if let Ok(op) = UnaryOperator::parse(&next, &lex.peeked_span()?) {
                 let rhs = self.parse_pratt_fragment(lex, op.binding_power())?;
 
                 Expr::node(op.expr(rhs), self.arena)
             } else {
-                return Err(ParsingError::UnexpectedToken);
+                return Err(ParsingError::InvalidExpression(lex.span()));
             }
         } else {
             let next = lex.expect_next()?;
@@ -498,16 +542,16 @@ impl<'a> Parser<'a> {
                 && lex.peek_is(&Token::OpenParent)
             {
                 // TODO: use spans to check there is no space between ident, (.
-                self.parse_function_call(lex, name.qualify(self.namespace))?
+                self.parse_function_call(lex, name.qualify(self.namespace), lex.span())?
             } else {
                 Expr::leaf(self.parse_atom(lex, next)?)
             }
         };
 
-        while let Some(next) = lex.peek() {
-            let next = next.as_ref().map_err(Clone::clone)?;
+        while let Some((next, span)) = lex.peek_with_span() {
+            let next = next?;
 
-            if let Ok(op) = BinaryOperator::try_from(next)
+            if let Ok(op) = BinaryOperator::parse(next, &span)
                 && !matches!(next, Token::Increment | Token::Decrement)
             {
                 let (left_bp, right_bp) = op.binding_power();
@@ -519,10 +563,10 @@ impl<'a> Parser<'a> {
 
                 let rhs = self.parse_pratt_fragment(lex, right_bp)?;
                 lhs = Expr::node(op.expr(lhs, rhs), self.arena);
-            } else if let Ok(op) = PlaceOperator::try_from(next) {
+            } else if let Ok(op) = PlaceOperator::parse(next, &span) {
                 let (left_bp, right_bp) = op.binding_power();
                 let Expr::Leaf(Atom::Variable(var)) = lhs.take() else {
-                    return Err(ParsingError::UnexpectedToken);
+                    return Err(ParsingError::OperatorExpectsVariable(lex.span()));
                 };
 
                 if left_bp < min_bp {
@@ -549,7 +593,7 @@ impl<'a> Parser<'a> {
                             self.arena,
                         );
                     }
-                    lex.expect(&Token::ClosedBracket)?;
+                    lex.expect(&Token::ClosedBracket, ParsingError::UnclosedArrayAccess)?;
                 }
                 lhs = Expr::node(op.expr(var, rhs), self.arena);
             } else if next == &Token::QuestionMark {
@@ -559,12 +603,12 @@ impl<'a> Parser<'a> {
                 }
                 lex.next();
                 let then_branch = self.parse_pratt_fragment(lex, right_bp)?;
-                lex.expect(&Token::Colon)?;
+                lex.expect(&Token::Colon, ParsingError::MissingTernaryOr)?;
                 let else_branch = self.parse_pratt_fragment(lex, right_bp)?;
                 lhs = Expr::node(ExprNode::Ternary(lhs, then_branch, else_branch), self.arena);
             } else if let Some((operation, reciprocal, bp)) = BinaryOperator::unfold_suffix(next) {
                 let Expr::Leaf(Atom::Variable(rhs)) = lhs else {
-                    return Err(ParsingError::UnexpectedToken);
+                    return Err(ParsingError::OperatorExpectsVariable(lex.span()));
                 };
                 if bp < min_bp {
                     break;
@@ -609,13 +653,19 @@ impl<'a> Parser<'a> {
         &mut self,
         lex: &mut Lexer<'a>,
         name: Identifier<'a>,
+        span: Span,
     ) -> Result<Expr<'a>> {
-        lex.expect(&Token::OpenParent)?;
+        lex.expect(&Token::OpenParent, ParsingError::ExpectedOpeningParenthesis)?;
+        if lex.span().start != span.end {
+            return Err(ParsingError::FunctionCallSeparatedIdent(span));
+        }
         let expr = ExprNode::FunctionCall(
             name,
             self.parse_arguments(lex, |t| t == &Token::ClosedParent)?,
         );
-        lex.expect(&Token::ClosedParent)?;
+        lex.expect(&Token::ClosedParent, |s| {
+            ParsingError::FunctionCallMissingParenthesis(s, name.to_string())
+        })?;
         Ok(Expr::node(expr, self.arena))
     }
 
@@ -643,7 +693,10 @@ impl<'a> Parser<'a> {
             Token::RstartVariable => Ok(Variable::Rstart.into()),
             Token::RlengthVariable => Ok(Variable::Rlength.into()),
             Token::EnvironVariable => Ok(Variable::Environ.into()),
-            _ => Err(ParsingError::UnexpectedToken),
+            _ => Err(ParsingError::UnexpectedToken(
+                lex.span(),
+                "is not valid data.".into(),
+            )),
         }
     }
 }

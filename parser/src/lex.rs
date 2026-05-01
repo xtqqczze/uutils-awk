@@ -37,10 +37,14 @@ impl<'a> Lexer<'a> {
             .is_some_and(|r| r.as_ref().is_ok_and(|t| t == b))
     }
 
-    pub fn expect(&mut self, expected: &Token) -> super::Result<Token<'a>> {
+    pub fn expect(
+        &mut self,
+        expected: &Token,
+        err: impl FnOnce(Span) -> ParsingError,
+    ) -> super::Result<Token<'a>> {
         match self.next() {
             Some(Ok(tok)) if expected == &tok => Ok(tok),
-            Some(Ok(_)) => Err(ParsingError::UnexpectedToken),
+            Some(Ok(_)) => Err(err(self.span())),
             Some(err @ Err(_)) => err.map_err(Into::into),
             None => todo!(),
         }
@@ -49,17 +53,21 @@ impl<'a> Lexer<'a> {
     pub fn expect_with(
         &mut self,
         expected: impl FnOnce(&Token<'a>) -> bool,
+        msg: String,
     ) -> super::Result<Token<'a>> {
         match self.next() {
             Some(Ok(tok)) if expected(&tok) => Ok(tok),
-            Some(Ok(_)) => Err(ParsingError::UnexpectedToken),
+            Some(Ok(_)) => Err(ParsingError::UnexpectedToken(self.span(), msg)),
             Some(err @ Err(_)) => err.map_err(Into::into),
             None => todo!(),
         }
     }
 
     pub fn expect_identifier(&mut self) -> super::Result<lexer::Identifier<'a>> {
-        let Token::Identifier(name) = self.expect_with(|t| matches!(t, Token::Identifier(_)))?
+        let Token::Identifier(name) = self.expect_with(
+            |t| matches!(t, Token::Identifier(_)),
+            "expected an identifier.".into(),
+        )?
         else {
             unreachable!()
         };
@@ -113,8 +121,20 @@ impl<'a> Lexer<'a> {
         self.span.clone()
     }
 
-    pub fn peek_span(&mut self) -> Option<Span> {
-        self.inner.peek().map(|(_, s)| s.clone())
+    pub fn peeked_span(&mut self) -> super::Result<Span> {
+        self.inner
+            .peek()
+            .map(|(_, s)| s.clone())
+            .ok_or(ParsingError::LexingError(LexingError::UnexpectedEof))
+    }
+
+    pub fn peek_with_span(&mut self) -> Option<(super::Result<&Token<'a>>, Span)> {
+        self.inner.peek().map(|(a, b)| {
+            (
+                a.as_ref().map_err(|e| ParsingError::LexingError(e.clone())),
+                b.clone(),
+            )
+        })
     }
 
     fn advance_span(&mut self, next: Option<(LexItem<'a>, Span)>) -> Option<LexItem<'a>> {
