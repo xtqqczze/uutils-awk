@@ -2,6 +2,7 @@
 //
 // For the full copyright and license information, please view the LICENSE
 // files that was distributed with this source code.
+#![forbid(unsafe_code)]
 
 mod ast;
 mod diagnostics;
