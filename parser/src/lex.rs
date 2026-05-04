@@ -209,7 +209,7 @@ impl TokenExt for Token<'_> {
         )
     }
     fn is_expr_start(&self) -> bool {
-        self.is_atom() || self.is_prefix_op()
+        self.is_atom() || self.is_prefix_op() || self == &Token::OpenParent
     }
     fn is_pattern_start(&self) -> bool {
         self.is_expr_start() || self.maps_to_special_pat().is_some()
