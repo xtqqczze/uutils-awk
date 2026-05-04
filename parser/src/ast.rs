@@ -308,6 +308,9 @@ impl<'a> BinaryOperator {
             Token::Minus => Ok(Self::Subtract),
             Token::Star => Ok(Self::Multiply),
             Token::Slash => Ok(Self::Divide),
+            Token::BooleanAnd => Ok(Self::And),
+            Token::BooleanOr => Ok(Self::Or),
+            Token::Percent => Ok(Self::Modulo),
             t if t.is_expr_start() => Ok(Self::Concat),
             _ => Err(ParsingError::UnexpectedToken(
                 span.clone(),
