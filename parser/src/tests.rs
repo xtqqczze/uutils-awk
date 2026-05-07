@@ -11,7 +11,7 @@ fn parse<'a, T: Debug>(
 ) -> super::Result<String> {
     let mut parser = Parser::new(arena);
     parser
-        .parse_top(&mut Lexer::new(source.as_bytes()), true)
+        .parse_top(&mut Lexer::new(source.as_bytes(), arena), true)
         .map(|x| format!("{:?}", selector(x)))
 }
 

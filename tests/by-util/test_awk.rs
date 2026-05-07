@@ -22,9 +22,8 @@ fn write_to_dev_full_does_not_panic() {
     use std::fs::OpenOptions;
     use std::process::{Command, Stdio};
 
-    let dev_full = match OpenOptions::new().write(true).open("/dev/full") {
-        Ok(f) => f,
-        Err(_) => return, // /dev/full not available; skip.
+    let Ok(dev_full) = OpenOptions::new().write(true).open("/dev/full") else {
+        return; // /dev/full not available; skip.
     };
     let output = Command::new(super::TESTS_BINARY)
         .arg("BEGIN { print 1 }")
