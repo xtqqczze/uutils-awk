@@ -8,13 +8,14 @@ mod tests;
 
 use core::str;
 use std::{
-    borrow::Cow,
     fmt::{Debug, Display},
     slice::SliceIndex,
 };
 
+use bumpalo::{Bump, collections::Vec};
+use logos::Logos;
 use logos::Skip;
-pub use logos::{Logos, Span, SpannedIter};
+pub use logos::{Span, SpannedIter};
 use memchr::{memchr, memchr3};
 use thiserror::Error;
 
@@ -27,7 +28,7 @@ pub type Result<T, E = LexingError> = std::result::Result<T, E>;
 #[logos(skip("[ \t]+"))]
 #[logos(skip(r"(\\\n)+"))]
 #[logos(skip("#", skip_line))]
-#[logos(extras = Context)]
+#[logos(extras = Extra)]
 #[logos(subpattern identifier = r"[a-zA-Z_][a-zA-Z0-9_]*")]
 #[logos(error(LexingError, callback = |lex| LexingError::from(lex)))]
 pub enum Token<'a> {
@@ -216,6 +217,9 @@ pub enum Token<'a> {
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
+pub struct Extra(Context, *const Bump);
+
+#[derive(Debug, Default, PartialEq, Eq)]
 pub enum Context {
     #[default]
     AcceptExpression,
@@ -243,6 +247,12 @@ pub struct Identifier<'a> {
     pub literal: &'a str,
 }
 
+impl<'a> Token<'a> {
+    pub fn lex(source: &'a [u8], arena: &'a Bump) -> logos::Lexer<'a, Self> {
+        Lexer::with_extras(source, Extra(Context::AcceptExpression, arena))
+    }
+}
+
 impl From<&mut Lexer<'_>> for LexingError {
     fn from(lex: &mut Lexer<'_>) -> Self {
         Self::Unexpected(lex.span(), String::from_utf8_lossy(lex.slice()).to_string())
@@ -259,7 +269,7 @@ fn parse_string<'a>(lex: &mut logos::Lexer<'a, Token<'a>>) -> Result<Slice<'a>> 
 }
 
 fn parse_regex_or_slash<'a>(lex: &mut logos::Lexer<'a, Token<'a>>) -> Result<Token<'a>> {
-    match lex.extras {
+    match lex.extras.0 {
         Context::AcceptExpression => {
             accept_operator(lex);
             parse_content::<false, true, '/'>(lex).map(Token::Regex)
@@ -280,7 +290,7 @@ fn parse_content<'a, const MINIMAL: bool, const REGEX: bool, const DELIMITER: ch
 ) -> Result<Slice<'a>> {
     let rest = lex.remainder();
     let mut start = 0;
-    let mut out: Cow<'a, [u8]> = Cow::Borrowed(&[]);
+    let mut out = Slice::Borrowed(&[]);
 
     while let Some(rel_i) = memchr3(b'\n', b'\\', DELIMITER as u8, &rest[start..]) {
         let i = start + rel_i;
@@ -290,15 +300,18 @@ fn parse_content<'a, const MINIMAL: bool, const REGEX: bool, const DELIMITER: ch
                 // push remaining segment
                 lex.bump(i + 1);
                 if start == 0 {
-                    out = Cow::Borrowed(&rest[..i]);
+                    out = Slice::Borrowed(&rest[..i]);
                 } else {
-                    out.to_mut().extend_from_slice(&rest[start..i]);
+                    out.to_mut(lex.extras.arena())
+                        .extend_from_slice(&rest[start..i]);
                 }
-                return Ok(Slice(out));
+                return Ok(out);
             }
             b'\\' => {
-                out.to_mut().extend_from_slice(&rest[start..i]);
-                let consumed = parse_escape::<MINIMAL, REGEX>(&rest[i..], out.to_mut())?;
+                out.to_mut(lex.extras.arena())
+                    .extend_from_slice(&rest[start..i]);
+                let consumed =
+                    parse_escape::<MINIMAL, REGEX>(&rest[i..], out.to_mut(lex.extras.arena()))?;
                 start = i + consumed;
             }
             _ => break,
@@ -394,20 +407,22 @@ impl<'a> Identifier<'a> {
 }
 
 fn accept_expression(lex: &mut Lexer<'_>) {
-    lex.extras = Context::AcceptExpression;
+    lex.extras.0 = Context::AcceptExpression;
 }
 
 fn accept_operator(lex: &mut Lexer<'_>) {
-    lex.extras = Context::AcceptOperator;
+    lex.extras.0 = Context::AcceptOperator;
 }
 
-#[repr(transparent)]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
-pub struct Slice<'a>(Cow<'a, [u8]>);
+pub enum Slice<'a> {
+    Borrowed(&'a [u8]),
+    Owned(Vec<'a, u8>),
+}
 
 impl Display for Slice<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", String::from_utf8_lossy(&self.0).as_ref())
+        write!(f, "{}", String::from_utf8_lossy(self.as_ref()).as_ref())
     }
 }
 
@@ -419,6 +434,41 @@ impl Debug for Slice<'_> {
 
 impl AsRef<[u8]> for Slice<'_> {
     fn as_ref(&self) -> &[u8] {
-        &self.0
+        match self {
+            Self::Borrowed(x) => x,
+            Self::Owned(x) => x,
+        }
+    }
+}
+
+impl<'a> Slice<'a> {
+    pub fn to_mut(&mut self, arena: &'a Bump) -> &mut Vec<'a, u8> {
+        if let Self::Borrowed(x) = self {
+            let mut vec = Vec::new_in(arena);
+            vec.extend_from_slice_copy(x);
+            *self = Self::Owned(vec);
+        }
+        let Self::Owned(x) = self else { unreachable!() };
+        x
+    }
+}
+
+impl<'a> From<&'a [u8]> for Slice<'a> {
+    fn from(value: &'a [u8]) -> Self {
+        Self::Borrowed(value)
+    }
+}
+
+impl<'a> From<Vec<'a, u8>> for Slice<'a> {
+    fn from(value: Vec<'a, u8>) -> Self {
+        Self::Owned(value)
+    }
+}
+
+impl Extra {
+    fn arena<'a>(&self) -> &'a Bump {
+        // SAFETY: lives for as long as self because it's the same lifetime as
+        // the source being lexed; Logos just can't take lifetimes on extras.
+        unsafe { &*self.1 }
     }
 }

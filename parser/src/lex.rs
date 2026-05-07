@@ -5,7 +5,8 @@
 
 use std::{fmt::Debug, iter::Peekable};
 
-use lexer::{LexingError, Logos, Span, SpannedIter, Token};
+use bumpalo::Bump;
+use lexer::{LexingError, Span, SpannedIter, Token};
 
 use crate::{
     ParsingError,
@@ -21,9 +22,9 @@ pub struct Lexer<'a> {
 type LexItem<'a> = <Lexer<'a> as Iterator>::Item;
 
 impl<'a> Lexer<'a> {
-    pub fn new(source: &'a [u8]) -> Self {
+    pub fn new(source: &'a [u8], arena: &'a Bump) -> Self {
         Self {
-            inner: Token::lexer(source).spanned().peekable(),
+            inner: Token::lex(source, arena).spanned().peekable(),
             span: Span::default(),
             // source,
         }

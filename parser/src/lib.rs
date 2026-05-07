@@ -70,7 +70,7 @@ impl<'a> Parser<'a> {
     pub fn parse(&mut self, name: &'a str, source: &'a [u8]) -> Result<&Ast<'a>, AriadneErr<'a>> {
         let source = self.arena.alloc_slice_copy(source);
         self.current_file = name;
-        let mut lex = Lexer::new(source);
+        let mut lex = Lexer::new(source, self.arena);
         let parsed = self.parse_top(&mut lex, true);
         parsed.map_err(|error| report_error(error, name, source))
     }
@@ -124,14 +124,14 @@ impl<'a> Parser<'a> {
                     Token::IncludeDirective(path) => {
                         let old_namespace = self.namespace;
                         let content = self.preprocessor.include_in(path.as_ref(), self.arena);
-                        self.parse_top(&mut Lexer::new(content), true)?;
+                        self.parse_top(&mut Lexer::new(content, self.arena), true)?;
                         lex.expect_with(Token::is_stmnt_end, "expected statement end.".into())?;
                         self.namespace = old_namespace;
                     }
                     Token::NsIncludeDirective(path) => {
                         let old_namespace = self.namespace;
                         let content = self.preprocessor.include_in(path.as_ref(), self.arena);
-                        self.parse_top(&mut Lexer::new(content), false)?;
+                        self.parse_top(&mut Lexer::new(content, self.arena), false)?;
                         lex.expect_with(Token::is_stmnt_end, "expected statement end.".into())?;
                         self.namespace = old_namespace;
                     }
