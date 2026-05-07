@@ -53,7 +53,7 @@ impl<'a> Lexer<'a> {
             Some(Ok(tok)) if expected == &tok => Ok(tok),
             Some(Ok(_)) => Err(err(self.span())),
             Some(err @ Err(_)) => err.map_err(Into::into),
-            None => todo!(),
+            None => Err(ParsingError::LexingError(LexingError::UnexpectedEof)),
         }
     }
 
@@ -66,7 +66,7 @@ impl<'a> Lexer<'a> {
             Some(Ok(tok)) if expected(&tok) => Ok(tok),
             Some(Ok(_)) => Err(ParsingError::UnexpectedToken(self.span(), msg)),
             Some(err @ Err(_)) => err.map_err(Into::into),
-            None => todo!(),
+            None => Err(ParsingError::LexingError(LexingError::UnexpectedEof)),
         }
     }
 

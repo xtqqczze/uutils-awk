@@ -163,7 +163,10 @@ impl<'a, 'b> Pratt<'a, 'b> {
             self.parser
                 .parse_function_call(lex, name.qualify(self.parser.namespace), lex.span())
         } else {
-            Ok(Expr::leaf(self.parser.parse_atom(lex, next)?))
+            match self.parser.parse_atom(lex, next) {
+                Ok(atom) => Ok(Expr::leaf(atom)),
+                Err(_) => Err(ParsingError::InvalidExpression(lex.span())),
+            }
         }
     }
 

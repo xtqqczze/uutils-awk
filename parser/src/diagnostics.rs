@@ -149,7 +149,7 @@ pub fn report_error<'a>(
     name: &'a str,
     source: &'a [u8],
 ) -> super::AriadneErr<'a> {
-    let span = error.span().unwrap();
+    let span = error.span().unwrap_or(source.len()..source.len());
     let source = str::from_utf8(source).unwrap();
     let mut report = Report::build(ReportKind::Error, (name, span.clone()))
         .with_message("Syntax error")

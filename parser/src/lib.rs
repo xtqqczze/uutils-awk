@@ -157,7 +157,12 @@ impl<'a> Parser<'a> {
                         ));
                     }
                     Token::Newline | Token::Semicolon => {}
-                    x => unimplemented!("{x:?}"),
+                    _ => {
+                        return Err(ParsingError::UnexpectedToken(
+                            lex.span(),
+                            "invalid rule beginning.".into(),
+                        ));
+                    }
                 }
             }
         }
@@ -362,7 +367,12 @@ impl<'a> Parser<'a> {
                         .then(|| self.parse_expression(lex))
                         .transpose()?,
                 ),
-                a => todo!("{a:?}"),
+                _ => {
+                    return Err(ParsingError::UnexpectedToken(
+                        lex.span(),
+                        "invalid statement start.".into(),
+                    ));
+                }
             }
         };
 
