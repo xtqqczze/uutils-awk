@@ -8,6 +8,7 @@ mod tests;
 
 use core::str;
 use std::{
+    cmp::Ordering,
     fmt::{Debug, Display},
     slice::SliceIndex,
 };
@@ -33,7 +34,7 @@ pub type Result<T, E = LexingError> = std::result::Result<T, E>;
 #[logos(subpattern ignore_with_nl = r"(?:(?&ignore)|\n)*")]
 #[logos(error(LexingError, callback = |lex| LexingError::unexpected(lex)))]
 pub enum Token<'a> {
-    #[regex(r"[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?", parse_float)]
+    #[regex(r"(-)?[0-9]+(\.[0-9]*)?([eE][+-]?[0-9]+)?", parse_float)]
     #[regex(r"\.[0-9]+([eE][+-]?[0-9]+)?", parse_float)]
     Number(f64),
     #[token("\"", parse_string)]
@@ -308,14 +309,15 @@ fn skip_line(lex: &mut Lexer<'_>) -> Skip {
 }
 
 fn parse_string<'a>(lex: &mut logos::Lexer<'a, Token<'a>>) -> Result<Slice<'a>> {
-    parse_content::<false, false, '"'>(lex)
+    accept_operator(lex);
+    parse_content::<false, '"'>(lex)
 }
 
 fn parse_regex_or_slash<'a>(lex: &mut logos::Lexer<'a, Token<'a>>) -> Result<Token<'a>> {
     match lex.extras.ctx {
         Context::AcceptExpression => {
             accept_operator(lex);
-            parse_content::<false, true, '/'>(lex).map(Token::Regex)
+            parse_content::<true, '/'>(lex).map(Token::Regex)
         }
         Context::AcceptOperator => {
             accept_expression(lex);
@@ -326,7 +328,7 @@ fn parse_regex_or_slash<'a>(lex: &mut logos::Lexer<'a, Token<'a>>) -> Result<Tok
 
 fn parse_directive<'a>(lex: &mut Lexer<'a>) -> Result<Slice<'a>> {
     accept_expression(lex);
-    parse_content::<true, false, '"'>(lex)
+    parse_content::<false, '"'>(lex)
 }
 
 fn parse_non_posix_directive<'a>(lex: &mut Lexer<'a>) -> Result<Slice<'a>> {
@@ -347,7 +349,7 @@ fn parse_namespace_directive<'a>(lex: &mut Lexer<'a>) -> Result<&'a str> {
     }
 }
 
-fn parse_content<'a, const MINIMAL: bool, const REGEX: bool, const DELIMITER: char>(
+fn parse_content<'a, const REGEX: bool, const DELIMITER: char>(
     lex: &mut Lexer<'a>,
 ) -> Result<Slice<'a>> {
     let rest = lex.remainder();
@@ -372,7 +374,7 @@ fn parse_content<'a, const MINIMAL: bool, const REGEX: bool, const DELIMITER: ch
             b'\\' => {
                 out.to_mut(lex.extras.arena())
                     .extend_from_slice(&rest[start..i]);
-                let consumed = parse_escape::<MINIMAL, REGEX>(
+                let consumed = parse_escape::<REGEX>(
                     &rest[i..],
                     out.to_mut(lex.extras.arena()),
                     lex.extras.posix_strict,
@@ -389,7 +391,7 @@ fn parse_content<'a, const MINIMAL: bool, const REGEX: bool, const DELIMITER: ch
     }
 }
 
-fn parse_escape<const MINIMAL: bool, const REGEX: bool>(
+fn parse_escape<const REGEX: bool>(
     slice: &[u8],
     out: &mut Vec<u8>,
     posix_strict: bool,
@@ -406,39 +408,30 @@ fn parse_escape<const MINIMAL: bool, const REGEX: bool>(
     }
 
     // On minimal, only drop backslash for '"' and '\n'
-    let escaped = if MINIMAL && !matches!(to_escape, '"' | '\n') {
-        out.push(b'\\');
-        to_escape
-    } else if MINIMAL {
-        to_escape
-    } else {
-        match to_escape {
-            c @ ('\\' | '"') if !REGEX => c,
-            c @ ('[' | ']' | '{' | '}' | '(' | ')' | '*' | '+' | '^' | '$' | '.' | '?')
-                if REGEX =>
-            {
-                out.push(b'\\');
-                c
-            }
-            'a' => 7 as char,
-            'b' => 8 as char,
-            'f' => 12 as char,
-            'n' => '\n',
-            'r' => '\r',
-            't' => '\t',
-            'v' => 11 as char,
-            n if is_oct(n) => {
-                count += is_slice_oct(2) as usize + (is_slice_oct(2) && is_slice_oct(3)) as usize;
-                slice[1..]
-                    .iter()
-                    .take(count - 1)
-                    .fold(0, |acc, digit| acc * 8 + digit - b'0') as char
-            }
-            'x' if !posix_strict => todo!(),
-            'u' => todo!(),
-            // Unspecified by POSIX; we ditto GNU.
-            c => c, // TODO: Output warning
+    let escaped = match to_escape {
+        c @ ('\\' | '"') if !REGEX => c,
+        c @ ('[' | ']' | '{' | '}' | '(' | ')' | '*' | '+' | '^' | '$' | '.' | '?') if REGEX => {
+            out.push(b'\\');
+            c
         }
+        'a' => 7 as char,
+        'b' => 8 as char,
+        'f' => 12 as char,
+        'n' => '\n',
+        'r' => '\r',
+        't' => '\t',
+        'v' => 11 as char,
+        n if is_oct(n) => {
+            count += is_slice_oct(2) as usize + (is_slice_oct(2) && is_slice_oct(3)) as usize;
+            slice[1..]
+                .iter()
+                .take(count - 1)
+                .fold(0, |acc, digit| acc * 8 + digit - b'0') as char
+        }
+        'x' if !posix_strict => todo!(),
+        'u' => todo!(),
+        // Unspecified by POSIX; we ditto GNU.
+        c => c, // TODO: Output warning
     };
     out.push(escaped as u8);
     Ok(count)
@@ -511,7 +504,7 @@ fn accept_operator(lex: &mut Lexer<'_>) {
     lex.extras.ctx = Context::AcceptOperator;
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(Clone)]
 pub enum Slice<'a> {
     Borrowed(&'a [u8]),
     Owned(Vec<'a, u8>),
@@ -556,9 +549,35 @@ impl<'a> From<&'a [u8]> for Slice<'a> {
     }
 }
 
+impl<'a, const N: usize> From<&'a [u8; N]> for Slice<'a> {
+    fn from(value: &'a [u8; N]) -> Self {
+        Self::Borrowed(value)
+    }
+}
+
 impl<'a> From<Vec<'a, u8>> for Slice<'a> {
     fn from(value: Vec<'a, u8>) -> Self {
         Self::Owned(value)
+    }
+}
+
+impl PartialEq for Slice<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_ref() == other.as_ref()
+    }
+}
+
+impl Eq for Slice<'_> {}
+
+impl PartialOrd for Slice<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Slice<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.as_ref().cmp(other.as_ref())
     }
 }
 
