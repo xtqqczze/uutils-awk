@@ -7,7 +7,7 @@ use ariadne::{Color, Label, Report, ReportKind, Source};
 use lexer::{LexingError, Span};
 use thiserror::Error;
 
-#[derive(Debug, Error, Clone)]
+#[derive(Debug, Error, Clone, PartialEq)]
 pub enum ParsingError {
     #[error("{}", .0)]
     LexingError(LexingError),

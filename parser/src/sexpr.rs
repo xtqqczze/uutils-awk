@@ -6,7 +6,7 @@
 use std::fmt::{Debug, Display, Formatter, Result};
 
 use crate::ast::{
-    Atom, Body, Identifier, Place, Redirection, SimpleStatement, Statement, Variable,
+    Atom, Body, Identifier, Place, Redirection, RulePattern, SimpleStatement, Statement, Variable,
 };
 
 const PRETTY_PRINT_INDENT: usize = 2;
@@ -303,6 +303,15 @@ impl Debug for Redirection {
             Self::AppendFile => write!(f, ">>"),
             Self::PipeIn => write!(f, "|"),
             Self::CoprocessIn => write!(f, "|&"),
+        }
+    }
+}
+
+impl Debug for RulePattern<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        match self {
+            Self::Expression(expr) => <_ as Debug>::fmt(expr, f),
+            Self::Range(on, off) => write!(f, "(Range {on:?} {off:?})"),
         }
     }
 }

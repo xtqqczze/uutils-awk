@@ -3,25 +3,135 @@
 // For the full copyright and license information, please view the LICENSE
 // files that was distributed with this source code.
 
-use std::fmt::Debug;
-
 use bumpalo::Bump;
 
 use crate::{Ast, Lexer, Parser};
 
-fn parse<'a, T: Debug>(
-    source: &'a str,
-    arena: &'a Bump,
-    selector: impl for<'b> FnOnce(&'b Ast<'a>) -> &'b T,
-) -> super::Result<String> {
-    let mut parser = Parser::new(arena);
-    parser
-        .parse_top(&mut Lexer::new(source.as_bytes(), arena), true)
-        .map(|x| format!("{:?}", selector(x)))
+fn parse<'a>(source: &'a str, arena: &'a Bump) -> super::Result<&'a Ast<'a>> {
+    let parser = arena.alloc(Parser::new(arena));
+    parser.parse_top(&mut Lexer::new(source.as_bytes(), arena), true)
+}
+
+// Behold! The Holy Macro to rule them all.
+macro_rules! test_parser {
+    (
+        $code:expr => {
+            $(loads:      $loads:expr,)?
+            $(begin:      $begin:expr,)?
+            $(end:        $end:expr,)?
+            $(begin_file: $begin_file:expr,)?
+            $(end_file:   $end_file:expr,)?
+            $(rules: $rules:expr,)?
+            $(concurrent: $concurrent:expr,)?
+            $(functions: $functions:expr,)?
+        }
+    ) => {
+        let arena = Bump::new();
+        let code = parse($code, &arena).unwrap();
+
+        #[allow(unused_mut, unused_assignments)]
+        let _ = {
+            use ::std::{option::Option, primitive::str, assert_eq, format};
+
+            let mut loads:      &[&str]                         = &[];
+            let mut end:        &[&str]                         = &[];
+            let mut begin:      &[&str]                         = &[];
+            let mut begin_file: &[&str]                         = &[];
+            let mut end_file:   &[&str]                         = &[];
+            let mut rules:      &[(Option<&str>, Option<&str>)] = &[];
+            let mut concurrent: &[(Option<&str>, Option<&str>)] = &[];
+            let mut functions:  &[(&str, &[&str], &str)]        = &[];
+
+            $(loads = &$loads;)?
+            $(end = &$end;)?
+            $(begin = &$begin;)?
+            $(begin_file = &$begin_file;)?
+            $(end_file = &$end_file;)?
+            $(rules = &$rules;)?
+            $(concurrent = &$concurrent;)?
+            $(functions = &$functions;)?
+
+            test_parser!(
+                @internal check |(a, b)| assert_eq!(a.as_bytes(), b.as_ref());
+                loads => code.loads
+            );
+            test_parser!(
+                @internal munch check_for_each code;
+                |(&a, b)| assert_eq!(a, &format!("{b:?}"));
+                begin, end, begin_file, end_file
+            );
+            test_parser!(
+                @internal munch check_for_each code;
+                |((e_pattern, e_actions), b)| {
+                    assert_eq!(
+                        *e_pattern,
+                        b.pattern.as_ref().map(|x| format!("{x:?}")).as_deref()
+                    );
+                    assert_eq!(
+                        *e_actions,
+                        b.actions.as_ref().map(|x| format!("{x:?}")).as_deref()
+                    );
+                };
+                rules, concurrent
+            );
+            test_parser!(
+                @internal check |((e_name, e_args, e_body), (name, fun))| {
+                    assert_eq!(e_name, &format!("{name:?}"));
+                    test_parser!(@internal check
+                        |(&a, b)| assert_eq!(a, &format!("{b:?}"));
+                        e_args => fun.args
+                    );
+                    assert_eq!(*e_body, format!("{:?}", fun.body));
+                };
+                functions => code.functions
+            );
+        };
+    };
+    (@internal check $lambda:expr; $a:expr => $b:expr) => {
+        assert_eq!($a.len(), $b.len());
+        $a.into_iter().zip(&$b).for_each($lambda);
+    };
+    (@internal check_for_each $code:ident; $lambda:expr; $a:ident) => {
+        test_parser!(@internal check $lambda; $a => $code.$a);
+    };
+    (@internal munch $method:ident $code:ident; $lambda:expr; $arg:ident, $($rest:tt)*) => {
+        test_parser!(@internal $method $code; $lambda; $arg);
+        test_parser!(@internal munch $method $code; $lambda; $($rest)*);
+    };
+    (@internal munch $method:ident $code:ident; $lambda:expr; $arg:ident) => {
+        test_parser!(@internal $method $code; $lambda; $arg);
+    };
+    (@internal munch $method:ident $code:ident; $lambda:expr;) => {};
 }
 
 #[test]
-fn test_if() {
-    let arena = Bump::new();
-    parse("{ if (x == 2) print y; }", &arena, |x| x).unwrap();
+fn test_parser_meta_holy_macro() {
+    let source = "
+        @load \"lib_foo.1\";
+        @load \"lib_bar.so\";
+
+        BEGIN { print 1 + 1 }
+        BEGIN { 2 + 2 == 4\nprint \"foo\" }
+        { if (a) print 2; }
+        $0 == \"lisp would be proud\";
+        function foo(a, b) { print a ? b : c }
+    ";
+    test_parser!(source => {
+        loads: ["lib_foo.1", "lib_bar.so"],
+        begin: [
+            "(body (Print (Add 1 1)))",
+            "(body (Eq (Add 2 2) 4) (Print \"foo\"))"
+        ],
+        rules: [
+            (None, Some("(body (if awk::a (body (Print 2))))")),
+            (Some("(Eq (Record 0) \"lisp would be proud\")"), None),
+        ],
+        functions: [
+            (
+                "awk::foo",
+                &["awk::a", "awk::b"],
+                "(body (Print (?: awk::a awk::b awk::c)))"
+            )
+        ],
+    });
 }

@@ -41,7 +41,6 @@ pub enum Atom<'a> {
     TypedRegex(Slice<'a>),
 }
 
-#[derive(Debug)]
 pub enum RulePattern<'a> {
     Expression(Expr<'a>),
     Range(Expr<'a>, Expr<'a>),
