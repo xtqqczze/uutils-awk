@@ -21,9 +21,9 @@ macro_rules! test_parser {
             $(end:        $end:expr,)?
             $(begin_file: $begin_file:expr,)?
             $(end_file:   $end_file:expr,)?
-            $(rules: $rules:expr,)?
+            $(rules:      $rules:expr,)?
             $(concurrent: $concurrent:expr,)?
-            $(functions: $functions:expr,)?
+            $(functions:  $functions:expr,)?
         }
     ) => {
         let arena = Bump::new();
@@ -42,14 +42,14 @@ macro_rules! test_parser {
             let mut concurrent: &[(Option<&str>, Option<&str>)] = &[];
             let mut functions:  &[(&str, &[&str], &str)]        = &[];
 
-            $(loads = &$loads;)?
-            $(end = &$end;)?
-            $(begin = &$begin;)?
+            $(loads      = &$loads;)?
+            $(end        = &$end;)?
+            $(begin      = &$begin;)?
             $(begin_file = &$begin_file;)?
-            $(end_file = &$end_file;)?
-            $(rules = &$rules;)?
+            $(end_file   = &$end_file;)?
+            $(rules      = &$rules;)?
             $(concurrent = &$concurrent;)?
-            $(functions = &$functions;)?
+            $(functions  = &$functions;)?
 
             test_parser!(
                 @internal check |(a, b)| assert_eq!(a.as_bytes(), b.as_ref());
@@ -86,6 +86,10 @@ macro_rules! test_parser {
                 functions => code.functions
             );
         };
+    };
+    (is_err!($($code:expr),*)) => {
+        let arena = Bump::new();
+        assert!([$($code),*].into_iter().all(|e| parse(e, &arena).is_err()));
     };
     (@internal check $lambda:expr; $a:expr => $b:expr) => {
         assert_eq!($a.len(), $b.len());
@@ -134,4 +138,44 @@ fn test_parser_meta_holy_macro() {
             )
         ],
     });
+}
+
+#[test]
+fn test_parser_valid_patterns() {
+    let source = "
+        BEGIN { print }
+        END { print }
+        BEGINFILE { print }
+        ENDFILE { print }
+        $0 == 1 && /x/ { print }
+        /abc/ { print }
+        !$0, x::a ? b : c { print }
+        awk;
+        1 + 1 \n { print }
+        { print }
+    ";
+    const BODY: &str = "(body (Print))";
+    test_parser!(source => {
+        begin: [BODY],
+        end: [BODY],
+        begin_file: [BODY],
+        end_file: [BODY],
+        rules: [
+            (Some("(And (Eq (Record 0) 1) /x/)"), Some(BODY)),
+            (Some("/abc/"), Some(BODY)),
+            (
+                Some("(Range (Negation (Record 0)) (?: x::a awk::b awk::c))"),
+                Some(BODY)
+            ),
+            (Some("awk::awk"), None),
+            (Some("(Add 1 1)"), None),
+            (None, Some(BODY)),
+            (None, Some(BODY)),
+        ],
+    });
+}
+
+#[test]
+fn test_parser_invalid_patterns() {
+    test_parser!(is_err!("BEGIN", "END", "BEGINFILE", "ENDFILE", "print 1;"));
 }
