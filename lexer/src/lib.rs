@@ -56,7 +56,7 @@ pub enum Token<'a> {
     NsIncludeDirective,
     #[regex("@namespace", parse_non_posix_operator)]
     NamespaceDirective,
-    #[token("@concurrent", parse_non_gnu_operator)]
+    #[token("@concurrent", parse_non_gnu_directive)]
     ConcurrentDirective,
     #[token("if", accept_expression)]
     If,
@@ -304,6 +304,7 @@ impl LexingError {
     }
 
     #[cold]
+    #[allow(dead_code)] // Remove if we add extensions that require it.
     fn non_uu(lex: &mut Lexer<'_>) -> Self {
         Self::UnavailableOnGnu(lex.span(), Self::to_utf8(lex))
     }
@@ -453,12 +454,14 @@ fn parse_non_posix_operator(lex: &mut Lexer<'_>) -> Result<()> {
     }
 }
 
-fn parse_non_gnu_operator(lex: &mut Lexer<'_>) -> Result<()> {
-    if lex.extras.gnu_strict {
-        Err(LexingError::non_uu(lex))
+fn parse_non_gnu_directive<'a>(lex: &mut Lexer<'a>) -> Result<Token<'a>> {
+    accept_expression(lex);
+    if lex.extras.posix_strict {
+        Err(LexingError::non_posix(lex))
+    } else if lex.extras.gnu_strict {
+        Ok(Token::IndirectCall(Identifier::without_namespace::<1>(lex)))
     } else {
-        accept_expression(lex);
-        Ok(())
+        Ok(Token::ConcurrentDirective)
     }
 }
 

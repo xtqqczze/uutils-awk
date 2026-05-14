@@ -95,10 +95,15 @@ fn lexer_test_multiline() {
 }
 
 #[test]
-#[should_panic]
 fn lexer_test_uu_extensions() {
     let arena = Bump::new();
-    lex(b"@concurrent", &arena, false, true);
+    assert_eq!(
+        lex(b"@concurrent", &arena, false, true),
+        &[Token::IndirectCall(Identifier {
+            namespace: None,
+            literal: "concurrent"
+        })]
+    );
 }
 
 #[test]
