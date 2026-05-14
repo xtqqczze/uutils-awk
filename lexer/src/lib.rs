@@ -10,6 +10,7 @@ use core::str;
 use std::{
     cmp::Ordering,
     fmt::{Debug, Display},
+    ptr::NonNull,
     slice::SliceIndex,
 };
 
@@ -228,10 +229,10 @@ pub enum Token<'a> {
     Semicolon,
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Extra {
     ctx: Context,
-    arena: *const Bump,
+    arena: NonNull<Bump>,
     posix_strict: bool,
     gnu_strict: bool,
 }
@@ -279,7 +280,7 @@ impl<'a> Token<'a> {
             source,
             Extra {
                 ctx: Context::AcceptExpression,
-                arena,
+                arena: NonNull::from_ref(arena),
                 posix_strict,
                 gnu_strict,
             },
@@ -582,6 +583,6 @@ impl Extra {
     fn arena<'a>(&self) -> &'a Bump {
         // SAFETY: lives for as long as self because it's the same lifetime as
         // the source being lexed; Logos just can't take lifetimes on extras.
-        unsafe { &*self.arena }
+        unsafe { self.arena.as_ref() }
     }
 }

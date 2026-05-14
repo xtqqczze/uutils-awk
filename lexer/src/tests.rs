@@ -5,7 +5,7 @@
 
 use std::io::Write;
 
-use crate::{Context, Extra, Identifier, Lexer, Token};
+use crate::{Identifier, Token};
 use bumpalo::{
     Bump,
     collections::{CollectIn, Vec},
@@ -17,17 +17,9 @@ fn lex<'a>(
     posix_strict: bool,
     gnu_strict: bool,
 ) -> Vec<'a, Token<'a>> {
-    Lexer::with_extras(
-        src,
-        Extra {
-            ctx: Context::AcceptExpression,
-            arena,
-            posix_strict,
-            gnu_strict,
-        },
-    )
-    .collect_in::<Result<Vec<_>, _>>(arena)
-    .unwrap()
+    Token::lex(src, arena, posix_strict, gnu_strict)
+        .collect_in::<Result<Vec<_>, _>>(arena)
+        .unwrap()
 }
 
 #[test]
