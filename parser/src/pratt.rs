@@ -231,6 +231,12 @@ impl<'a, 'b> Pratt<'a, 'b> {
         self.typecheck(lex, &lhs)?;
         // This is just a parsing construct; we only skip if it's a real token.
         lex.consume_with(|_| op != BinaryOperator::Concat);
+        // Checks invalids like `a == b == c`. The docs are ambiguous about the
+        // associativity of redirection operators, but I couldn't get awk to
+        // error out when chaining them.
+        if op.is_non_associative() && lhs.is_non_associative() {
+            return Err(ParsingError::NonAssociativeOperator(lex.span()));
+        }
         self.typed_regex = matches!(op, BinaryOperator::Matches | BinaryOperator::MatchesNot);
 
         let rhs = self.parse_expression(lex, op.binding_power().1)?;
@@ -349,6 +355,32 @@ impl<'a, 'b> Pratt<'a, 'b> {
         } else {
             Ok(())
         }
+    }
+}
+
+trait NonAssociativity {
+    fn is_non_associative(&self) -> bool;
+}
+
+impl NonAssociativity for Expr<'_> {
+    fn is_non_associative(&self) -> bool {
+        matches!(
+            self,
+            Expr::Node(x) if matches!(x.as_ref(), ExprNode::BinaryOperation(
+                op,
+                _,
+                _
+            ) if op.is_non_associative())
+        )
+    }
+}
+
+impl NonAssociativity for BinaryOperator {
+    fn is_non_associative(&self) -> bool {
+        matches!(
+            self,
+            Self::Eq | Self::NEq | Self::Gt | Self::Lt | Self::LtE | Self::GtE,
+        )
     }
 }
 

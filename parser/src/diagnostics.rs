@@ -73,6 +73,8 @@ pub enum ParsingError {
     SpecialVariableCall(Span, String),
     #[error("Can't use special variable `{}` for indirect function call.", .1)]
     SpecialVariableIndirectCall(Span, String),
+    #[error("Can't chain non-associative operators.")]
+    NonAssociativeOperator(Span),
 }
 
 impl ParsingError {
@@ -118,6 +120,7 @@ impl ParsingError {
             Self::UnexpectedTypedRegex(span) => Some(span.clone()),
             Self::SpecialVariableCall(span, _) => Some(span.clone()),
             Self::SpecialVariableIndirectCall(span, _) => Some(span.clone()),
+            Self::NonAssociativeOperator(span) => Some(span.clone()),
         }
     }
     fn hint(&self) -> Option<&'static str> {
@@ -150,6 +153,9 @@ impl ParsingError {
             }
             Self::UnexpectedTypedRegex(_) => Some(
                 "This is only valid in some contexts, like a right-hand assignment or a function argument.",
+            ),
+            Self::NonAssociativeOperator(_) => Some(
+                "Some operators can't be chained to avoid logical errors, such as comparison ones.\nExample: write `a == b && b == c` instead of `a == b == c`.",
             ),
             _ => None,
         }
