@@ -214,3 +214,27 @@ fn test_parser_relaxed_assignments() {
         }
     );
 }
+
+#[test]
+fn test_parser_inc_dec() {
+    let source = r#"
+        { ++a $0-- }
+        { --a[2] ++$(1 + 1) }
+        { a++ a["x"]-- }
+        { --a $"a"++ }
+    "#;
+    test_parser!(source => {
+        rules: [
+            (None, Some("(body (Concat (IncrementL awk::a) (DecrementR (Record 0))))")),
+            (
+                None,
+                Some("(body (Concat (DecrementL (ArrayAccess awk::a 2)) (IncrementL (Record (Add 1 1)))))")
+            ),
+            (None, Some("(body (Concat (IncrementR awk::a) (DecrementR (ArrayAccess awk::a \"x\"))))")),
+            (None, Some("(body (Concat (DecrementL awk::a) (IncrementR (Record \"a\"))))")),
+        ],
+    });
+    // these should parse as (Cat (--L (++R $0)) a), or otherwise error out.
+    // FIXME: not treated as errors yet.
+    // test_parser!(is_err!("{ $0++ --a }", "{ ++$0 ++a }"));
+}

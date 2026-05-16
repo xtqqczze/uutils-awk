@@ -267,7 +267,7 @@ impl Debug for Place<'_> {
         match self {
             Self::Record(expr) => write!(f, "(Record {expr:?})"),
             Self::Variable(var) => <_ as Debug>::fmt(var, f),
-            Self::ArrayElement(var, index) => write!(f, "(index {var:?} {index:?})"),
+            Self::ArrayElement(var, index) => write!(f, "(ArrayAccess {var:?} {index:?})"),
         }
     }
 }
