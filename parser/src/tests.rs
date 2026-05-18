@@ -269,3 +269,123 @@ fn test_parser_arrays() {
         "2 in a = 1"
     ));
 }
+
+#[test]
+fn test_parser_for_loop() {
+    let source = "
+        { for (i = 0; i < n; i++) print }
+        { for (; i < n; i++) print }
+        { for (i = 0; ; i++) print }
+        { for (i = 0; i < n;) print }
+        { for (; ; i++) print }
+        { for (; i < n;) print }
+        { for (i = 0; ;) print }
+        { for (; ;) print }
+        { for ((i in arr); a; b) print }
+        { for (((i, 2) in arr); ;) print }
+        { for (k in array) print }
+    ";
+    test_parser!(
+        source => {
+            rules: [
+                (
+                    None,
+                    Some("(body (for \
+                        Some((Assignment awk::i 0)) \
+                        Some((Lt awk::i awk::n)) \
+                        Some((IncrementR awk::i)) \
+                        (body (Print))))"
+                    )
+                ),
+                                (
+                    None,
+                    Some("(body (for \
+                        None \
+                        Some((Lt awk::i awk::n)) \
+                        Some((IncrementR awk::i)) \
+                        (body (Print))))"
+                    )
+                ),
+                (
+                    None,
+                    Some("(body (for \
+                        Some((Assignment awk::i 0)) \
+                        None \
+                        Some((IncrementR awk::i)) \
+                        (body (Print))))"
+                    )
+                ),
+                (
+                    None,
+                    Some("(body (for \
+                        Some((Assignment awk::i 0)) \
+                        Some((Lt awk::i awk::n)) \
+                        None \
+                        (body (Print))))"
+                    )
+                ),
+                (
+                    None,
+                    Some("(body (for \
+                        None \
+                        None \
+                        Some((IncrementR awk::i)) \
+                        (body (Print))))"
+                    )
+                ),
+                (
+                    None,
+                    Some("(body (for \
+                        None \
+                        Some((Lt awk::i awk::n)) \
+                        None \
+                        (body (Print))))"
+                    )
+                ),
+                (
+                    None,
+                    Some("(body (for \
+                        Some((Assignment awk::i 0)) \
+                        None \
+                        None \
+                        (body (Print))))"
+                    )
+                ),
+                (
+                    None,
+                    Some("(body (for \
+                        None \
+                        None \
+                        None \
+                        (body (Print))))"
+                    )
+                ),
+                (
+                    None,
+                    Some("(body (for \
+                        Some((In awk::arr awk::i)) \
+                        Some(awk::a) \
+                        Some(awk::b) \
+                        (body (Print))))"
+                    )
+                ),
+                (
+                    None,
+                    Some("(body (for \
+                        Some((In awk::arr awk::i 2)) \
+                        None \
+                        None \
+                        (body (Print))))"
+                    )
+                ),
+                (
+                    None,
+                    Some("(body (for-each awk::k awk::array (body (Print))))"
+                    )
+                ),
+            ],
+        }
+    );
+
+    test_parser!(is_err!("{ for(x in array; a; b) {} }"));
+}
