@@ -238,3 +238,34 @@ fn test_parser_inc_dec() {
     // FIXME: not treated as errors yet.
     // test_parser!(is_err!("{ $0++ --a }", "{ ++$0 ++a }"));
 }
+
+#[test]
+fn test_parser_arrays() {
+    let source = "
+        { a[1]; a[1] = x = b[2] = 2 + 2 }
+        { ++a[1]; print b[a]-- }
+        { a[1, 2, 3, \"a\"] += 1 }
+        { print a in arr, (1, 2, \"a\") in arr }
+        { print $((1, 2) in a) }
+    ";
+    test_parser!(source => {
+        rules: [
+            (
+                None,
+                Some("(body (Index awk::a 1) (Assignment (Index awk::a 1) (Assignment awk::x (Assignment (Index awk::b 2) (Add 2 2)))))")
+            ),
+            (None, Some("(body (IncrementL (Index awk::a 1)) (Print (DecrementR (Index awk::b awk::a))))")),
+            (None, Some("(body (AddAssign (Index awk::a 1 2 3 \"a\") 1))")),
+            (None, Some("(body (Print (In awk::arr awk::a) (In awk::arr 1 2 \"a\")))")),
+            (None, Some("(body (Print (Record (In awk::a 1 2))))")),
+        ],
+    });
+
+    test_parser!(is_err!(
+        "$(1, 2) in arr",
+        "x in 2",
+        "2[1]",
+        "\"a\"[2]",
+        "2 in a = 1"
+    ));
+}
