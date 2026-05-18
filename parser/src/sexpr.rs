@@ -6,7 +6,8 @@
 use std::fmt::{Debug, Display, Formatter, Result};
 
 use crate::ast::{
-    Atom, Body, Identifier, Place, Redirection, RulePattern, SimpleStatement, Statement, Variable,
+    Atom, Body, Expr, ExprNode, Getline, Identifier, Place, Redirection, RulePattern,
+    SimpleStatement, Statement, Variable,
 };
 
 const PRETTY_PRINT_INDENT: usize = 2;
@@ -183,6 +184,45 @@ impl Debug for SimpleStatement<'_> {
                 write!(f, "(delete (index {array:?} {index:?}))")
             }
             Self::Delete(array, None) => write!(f, "(delete {array:?})"),
+        }
+    }
+}
+
+impl Debug for Expr<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        match self {
+            Self::Leaf(atom) => write!(f, "{atom:?}"),
+            Self::Node(expr) => match expr.as_ref() {
+                ExprNode::FunctionCall(ident, args) => {
+                    write!(f, "({ident:?}")?;
+                    for arg in args {
+                        write!(f, " {arg:?}")?;
+                    }
+                    write!(f, ")")
+                }
+                ExprNode::IndirectCall(ident, args) => {
+                    write!(f, "(@{ident:?}")?;
+                    for arg in args {
+                        write!(f, " {arg:?}")?;
+                    }
+                    write!(f, ")")
+                }
+                ExprNode::UnaryOperation(op, a) => write!(f, "({op:?} {a:?})"),
+                ExprNode::BinaryOperation(op, a, b) => write!(f, "({op:?} {a:?} {b:?})"),
+                ExprNode::BinaryPlaceOperation(op, a, b) => write!(f, "({op:?} {a:?} {b:?})"),
+                ExprNode::UnaryPlaceOperation(op, a) => write!(f, "({op:?} {a:?})"),
+                ExprNode::Ternary(a, b, c) => write!(f, "(?: {a:?} {b:?} {c:?})"),
+                ExprNode::Getline(getline) => match getline {
+                    Getline::FromInput(Some(a)) => write!(f, "(getline {a:?})"),
+                    Getline::FromInput(None) => write!(f, "(getline)"),
+                    Getline::FromFile(Some(a), b) => write!(f, "(getline< {b:?} {a:?})"),
+                    Getline::FromFile(None, b) => write!(f, "(getline< {b:?})"),
+                    Getline::PipeOut(Some(a), b) => write!(f, "(getline| {b:?} {a:?})"),
+                    Getline::PipeOut(None, b) => write!(f, "(getline| {b:?})"),
+                    Getline::CoprocessOut(Some(a), b) => write!(f, "(getline|& {b:?} {a:?})"),
+                    Getline::CoprocessOut(None, b) => write!(f, "(getline|& {b:?})"),
+                },
+            },
         }
     }
 }
