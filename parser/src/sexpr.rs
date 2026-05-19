@@ -72,13 +72,13 @@ impl Debug for Statement<'_> {
                 update,
                 body,
             } => {
+                write!(f, "(for")?;
                 if alt {
-                    write!(f, "(for")?;
                     let write_fragment = |f: &mut Formatter, x: Option<&dyn Debug>| {
                         if let Some(x) = x {
                             write!(f, "\n{pad}{x:?}")
                         } else {
-                            write!(f, "\n{pad}None")
+                            write!(f, "\n{pad}(pass)")
                         }
                     };
                     write_fragment(f, init.as_ref().map(|x| x as _))?;
@@ -86,7 +86,17 @@ impl Debug for Statement<'_> {
                     write_fragment(f, update.as_ref().map(|x| x as _))?;
                     write!(f, "\n{pad}{body:#ni$?})")
                 } else {
-                    write!(f, "(for {init:?} {condition:?} {update:?} {body:?})")
+                    let write_fragment = |f: &mut Formatter, x: Option<&dyn Debug>| {
+                        if let Some(x) = x {
+                            write!(f, " {x:?}")
+                        } else {
+                            write!(f, " (pass)")
+                        }
+                    };
+                    write_fragment(f, init.as_ref().map(|x| x as _))?;
+                    write_fragment(f, condition.as_ref().map(|x| x as _))?;
+                    write_fragment(f, update.as_ref().map(|x| x as _))?;
+                    write!(f, " {body:?})")
                 }
             }
             Self::ForEach {

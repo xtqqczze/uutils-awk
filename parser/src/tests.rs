@@ -228,7 +228,9 @@ fn test_parser_inc_dec() {
             (None, Some("(body (Concat (IncrementL awk::a) (DecrementR (Record 0))))")),
             (
                 None,
-                Some("(body (Concat (DecrementL (Index awk::a 2)) (IncrementL (Record (Add 1 1)))))")
+                Some(
+                    "(body (Concat (DecrementL (Index awk::a 2)) (IncrementL (Record (Add 1 1)))))"
+                )
             ),
             (None, Some("(body (Concat (IncrementR awk::a) (DecrementR (Index awk::a \"x\"))))")),
             (None, Some("(body (Concat (DecrementL awk::a) (IncrementR (Record \"a\"))))")),
@@ -252,9 +254,17 @@ fn test_parser_arrays() {
         rules: [
             (
                 None,
-                Some("(body (Index awk::a 1) (Assignment (Index awk::a 1) (Assignment awk::x (Assignment (Index awk::b 2) (Add 2 2)))))")
+                Some("(body (Index awk::a 1) \
+                    (Assignment (Index awk::a 1) \
+                    (Assignment awk::x (Assignment (Index awk::b 2) (Add 2 2)))))"
+                )
             ),
-            (None, Some("(body (IncrementL (Index awk::a 1)) (Print (DecrementR (Index awk::b awk::a))))")),
+            (
+                None,
+                Some("(body (IncrementL (Index awk::a 1)) \
+                    (Print (DecrementR (Index awk::b awk::a))))"
+                )
+            ),
             (None, Some("(body (AddAssign (Index awk::a 1 2 3 \"a\") 1))")),
             (None, Some("(body (Print (In awk::arr awk::a) (In awk::arr 1 2 \"a\")))")),
             (None, Some("(body (Print (Record (In awk::a 1 2))))")),
@@ -277,10 +287,10 @@ fn test_parser_for_loop() {
         { for (; i < n; i++) print }
         { for (i = 0; ; i++) print }
         { for (i = 0; i < n;) print }
-        { for (; ; i++) print }
+        { for (;; i++) print }
         { for (; i < n;) print }
         { for (i = 0; ;) print }
-        { for (; ;) print }
+        { for (;;) print }
         { for ((i in arr); a; b) print }
         { for (((i, 2) in arr); ;) print }
         { for (k in array) print }
@@ -290,99 +300,31 @@ fn test_parser_for_loop() {
             rules: [
                 (
                     None,
-                    Some("(body (for \
-                        Some((Assignment awk::i 0)) \
-                        Some((Lt awk::i awk::n)) \
-                        Some((IncrementR awk::i)) \
-                        (body (Print))))"
-                    )
-                ),
-                                (
-                    None,
-                    Some("(body (for \
-                        None \
-                        Some((Lt awk::i awk::n)) \
-                        Some((IncrementR awk::i)) \
-                        (body (Print))))"
-                    )
+                    Some("(body (for (Assignment awk::i 0) (Lt awk::i awk::n) (IncrementR awk::i) \
+                        (body (Print))))")
                 ),
                 (
                     None,
-                    Some("(body (for \
-                        Some((Assignment awk::i 0)) \
-                        None \
-                        Some((IncrementR awk::i)) \
-                        (body (Print))))"
-                    )
+                    Some("(body (for (pass) (Lt awk::i awk::n) (IncrementR awk::i) \
+                        (body (Print))))")
                 ),
                 (
                     None,
-                    Some("(body (for \
-                        Some((Assignment awk::i 0)) \
-                        Some((Lt awk::i awk::n)) \
-                        None \
-                        (body (Print))))"
-                    )
+                    Some("(body (for (Assignment awk::i 0) (pass) (IncrementR awk::i) \
+                        (body (Print))))")
                 ),
                 (
                     None,
-                    Some("(body (for \
-                        None \
-                        None \
-                        Some((IncrementR awk::i)) \
-                        (body (Print))))"
-                    )
+                    Some("(body (for (Assignment awk::i 0) (Lt awk::i awk::n) (pass) \
+                        (body (Print))))")
                 ),
-                (
-                    None,
-                    Some("(body (for \
-                        None \
-                        Some((Lt awk::i awk::n)) \
-                        None \
-                        (body (Print))))"
-                    )
-                ),
-                (
-                    None,
-                    Some("(body (for \
-                        Some((Assignment awk::i 0)) \
-                        None \
-                        None \
-                        (body (Print))))"
-                    )
-                ),
-                (
-                    None,
-                    Some("(body (for \
-                        None \
-                        None \
-                        None \
-                        (body (Print))))"
-                    )
-                ),
-                (
-                    None,
-                    Some("(body (for \
-                        Some((In awk::arr awk::i)) \
-                        Some(awk::a) \
-                        Some(awk::b) \
-                        (body (Print))))"
-                    )
-                ),
-                (
-                    None,
-                    Some("(body (for \
-                        Some((In awk::arr awk::i 2)) \
-                        None \
-                        None \
-                        (body (Print))))"
-                    )
-                ),
-                (
-                    None,
-                    Some("(body (for-each awk::k awk::array (body (Print))))"
-                    )
-                ),
+                (None, Some("(body (for (pass) (pass) (IncrementR awk::i) (body (Print))))")),
+                (None, Some("(body (for (pass) (Lt awk::i awk::n) (pass) (body (Print))))")),
+                (None, Some("(body (for (Assignment awk::i 0) (pass) (pass) (body (Print))))")),
+                (None, Some("(body (for (pass) (pass) (pass) (body (Print))))")),
+                (None, Some("(body (for (In awk::arr awk::i) awk::a awk::b (body (Print))))")),
+                (None, Some("(body (for (In awk::arr awk::i 2) (pass) (pass) (body (Print))))")),
+                (None, Some("(body (for-each awk::k awk::array (body (Print))))")),
             ],
         }
     );
