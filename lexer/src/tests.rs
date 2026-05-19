@@ -66,13 +66,14 @@ fn lexer_test_newlines_posix() {
 #[test]
 fn lexer_test_collapsible_delimiters() {
     let arena = Bump::new();
-    let str = b";\\\n;;;\n\n\n\n;;;\n\\\n\n";
+    let str = b";\\\n;\n\n\n\n;;\n\\\n\n";
     assert_eq!(
         &lex(str, &arena, false, false),
         &[
             Token::Semicolon,
             Token::Semicolon,
             Token::Newline,
+            Token::Semicolon,
             Token::Semicolon,
             Token::Newline,
             Token::Newline,
