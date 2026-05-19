@@ -153,6 +153,7 @@ fn test_parser_valid_patterns() {
         awk;
         1 + 1 \n { print }
         { print }
+        a in arr { print }
     ";
     const BODY: &str = "(body (Print))";
     test_parser!(source => {
@@ -171,6 +172,7 @@ fn test_parser_valid_patterns() {
             (Some("(Add 1 1)"), None),
             (None, Some(BODY)),
             (None, Some(BODY)),
+            (Some("(In awk::arr awk::a)"), Some("(body (Print))")),
         ],
     });
 }
@@ -330,4 +332,106 @@ fn test_parser_for_loop() {
     );
 
     test_parser!(is_err!("{ for(x in array; a; b) {} }"));
+}
+
+#[test]
+fn test_parser_logical_operators() {
+    let source = r"
+        { a && b && c == 3 }
+        { a || b > 2 || c }
+        { 1 ~ /a/ || b && c }
+        { !a }
+        { !(a && b) }
+    ";
+    test_parser!(source => {
+        rules: [
+            (None, Some("(body (And (And awk::a awk::b) (Eq awk::c 3)))")),
+            (None, Some("(body (Or (Or awk::a (Gt awk::b 2)) awk::c))")),
+            (None, Some("(body (Or (Matches 1 /a/) (And awk::b awk::c)))")),
+            (None, Some("(body (Negation awk::a))")),
+            (None, Some("(body (Negation (And awk::a awk::b)))")),
+        ],
+    });
+}
+
+#[test]
+fn test_parser_delete() {
+    let source = r"
+        { delete arr[k] }
+        { delete arr[i, j] }
+        { delete arr }
+    ";
+    test_parser!(source => {
+        rules: [
+            (None, Some("(body (delete (Index awk::arr awk::k)))")),
+            (None, Some("(body (delete (Index awk::arr awk::i awk::j)))")),
+            (None, Some("(body (delete awk::arr))")),
+        ],
+    });
+}
+
+#[test]
+fn test_parser_if() {
+    let source = r"
+        { if (a) print }
+        { if (k in arr) print; else if (x) print; else print; }
+        { if (x == 1 && 2) print 1; else print 0 }
+    ";
+    test_parser!(source => {
+        rules: [
+            (None, Some("(body (if awk::a (body (Print))))")),
+            (
+                None,
+                Some("(body (if (In awk::arr awk::k) (body (Print)) (else (body (if awk::x \
+                (body (Print)) (else (body (Print))))))))")
+            ),
+            (
+                None,
+                Some("(body (if (And (Eq awk::x 1) 2) (body (Print 1)) (else (body (Print 0)))))")
+            ),
+        ],
+    });
+}
+
+#[test]
+fn test_parser_dangling_else() {
+    let source = "{ if (a) if (b) print 1; else print 2 }";
+    test_parser!(source => {
+        rules: [
+            (None, Some(
+                "(body (if awk::a (body (if awk::b (body (Print 1)) (else (body (Print 2)))))))"
+            )),
+        ],
+    });
+}
+
+#[test]
+fn test_parser_while() {
+    let source = r"
+        { while (a < 10) a++ }
+        { while (1) { print a; if (a > 5) break } }
+    ";
+    test_parser!(source => {
+        rules: [
+            (None, Some("(body (while (Lt awk::a 10) (body (IncrementR awk::a))))")),
+            (None, Some(concat!(
+                "(body (while 1 ",
+                "(body (Print awk::a) (if (Gt awk::a 5) (body (break))))))"
+            ))),
+        ],
+    });
+}
+
+#[test]
+fn test_parser_do_while() {
+    let source = r"
+        { do { a++ } while (a < 10) }
+        { do { print; break } while (a--) }
+    ";
+    test_parser!(source => {
+        rules: [
+            (None, Some("(body (do-while (body (IncrementR awk::a)) (Lt awk::a 10)))")),
+            (None, Some("(body (do-while (body (Print) (break)) (DecrementR awk::a)))")),
+        ],
+    });
 }
