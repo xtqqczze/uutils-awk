@@ -15,8 +15,7 @@ use std::{
 };
 
 use bumpalo::{Bump, collections::Vec};
-use logos::Logos;
-use logos::Skip;
+use logos::{Logos, Skip};
 pub use logos::{Span, SpannedIter};
 use memchr::{memchr, memchr3};
 use thiserror::Error;
@@ -524,10 +523,7 @@ fn parse_indirect_call<'a, const QUALIFIED: bool>(lex: &mut Lexer<'a>) -> Result
 
 impl<'a> Identifier<'a> {
     fn without_namespace<const SKIP: usize>(lex: &mut Lexer<'a>) -> Self {
-        Self {
-            namespace: None,
-            literal: parse_ident(lex, SKIP..),
-        }
+        Self { namespace: None, literal: parse_ident(lex, SKIP..) }
     }
 
     fn with_namespace<const SKIP: usize>(lex: &mut Lexer<'a>) -> Result<Self> {

@@ -5,11 +5,12 @@
 
 use std::io::Write;
 
-use crate::{Identifier, Token};
 use bumpalo::{
     Bump,
     collections::{CollectIn, Vec},
 };
+
+use crate::{Identifier, Token};
 
 fn lex<'a>(
     src: &'a [u8],
@@ -113,14 +114,8 @@ fn lexer_test_gnu_pattern() {
     assert_eq!(
         &lex(b"BEGINFILE ENDFILE", &arena, true, false),
         &[
-            Token::Identifier(Identifier {
-                namespace: None,
-                literal: "BEGINFILE"
-            }),
-            Token::Identifier(Identifier {
-                namespace: None,
-                literal: "ENDFILE"
-            })
+            Token::Identifier(Identifier { namespace: None, literal: "BEGINFILE" }),
+            Token::Identifier(Identifier { namespace: None, literal: "ENDFILE" })
         ]
     );
 }
@@ -166,25 +161,13 @@ fn lexer_test_ident_rules_non_posix() {
         &lex(b"1a::a a::1a _a", &arena, false, false),
         &[
             Token::Number(1.),
-            Token::Identifier(Identifier {
-                namespace: Some("a"),
-                literal: "a"
-            }),
-            Token::Identifier(Identifier {
-                namespace: None,
-                literal: "a"
-            }),
+            Token::Identifier(Identifier { namespace: Some("a"), literal: "a" }),
+            Token::Identifier(Identifier { namespace: None, literal: "a" }),
             Token::Colon,
             Token::Colon,
             Token::Number(1.),
-            Token::Identifier(Identifier {
-                namespace: None,
-                literal: "a"
-            }),
-            Token::Identifier(Identifier {
-                namespace: None,
-                literal: "_a"
-            })
+            Token::Identifier(Identifier { namespace: None, literal: "a" }),
+            Token::Identifier(Identifier { namespace: None, literal: "_a" })
         ]
     );
 }
@@ -215,10 +198,7 @@ fn lexer_test_general_tokens() {
             Token::BeginPattern,
             Token::OpenBrace,
             Token::Print,
-            Token::Identifier(Identifier {
-                namespace: None,
-                literal: "a"
-            }),
+            Token::Identifier(Identifier { namespace: None, literal: "a" }),
             Token::Plus,
             Token::Number(1.),
             Token::ClosedBrace,
@@ -231,10 +211,7 @@ fn lexer_test_general_tokens() {
             Token::Record,
             Token::Number(1.),
             Token::EqualTo,
-            Token::Identifier(Identifier {
-                namespace: Some("foo"),
-                literal: "bar"
-            }),
+            Token::Identifier(Identifier { namespace: Some("foo"), literal: "bar" }),
             Token::ClosedBrace,
             Token::Newline
         ]
@@ -250,10 +227,7 @@ fn lexer_test_regex_ambiguity() {
             Token::Number(1.),
             Token::SlashAssign,
             Token::Number(1.),
-            Token::Identifier(Identifier {
-                namespace: None,
-                literal: "a"
-            }),
+            Token::Identifier(Identifier { namespace: None, literal: "a" }),
             Token::SlashAssign,
             Token::Number(1.)
         ]

@@ -1,0 +1,5 @@
+imports_granularity = "Crate"
+group_imports = "StdExternalCrate"
+max_width = 100
+struct_lit_width = 50
+newline_style = "Unix"

@@ -24,10 +24,7 @@ pub struct Pratt<'a, 'b> {
 
 impl<'a, 'b> Pratt<'a, 'b> {
     pub fn new(parser: &'b mut Parser<'a>, typed_regex: bool) -> Self {
-        Self {
-            parser,
-            typed_regex,
-        }
+        Self { parser, typed_regex }
     }
 
     pub fn parse(&mut self, lex: &mut Lexer<'a>) -> Result<Expr<'a>> {

@@ -8,12 +8,11 @@ use std::{fmt::Debug, iter::Peekable};
 use bumpalo::Bump;
 use lexer::{Identifier, LexingError, Slice, Span, SpannedIter, Token};
 
+use super::Result;
 use crate::{
     ParsingError,
     ast::{Command, SpecialPattern},
 };
-
-use super::Result;
 
 pub struct Lexer<'a> {
     inner: Peekable<SpannedIter<'a, Token<'a>>>,

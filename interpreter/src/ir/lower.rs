@@ -3,9 +3,7 @@
 // For the full copyright and license information, please view the LICENSE
 // files that was distributed with this source code.
 
-use std::fmt::Display;
-use std::hash::Hash;
-use std::mem::forget;
+use std::{fmt::Display, hash::Hash, mem::forget};
 
 use bumpalo::{Bump, collections::Vec};
 use indexmap::IndexSet;
@@ -42,11 +40,7 @@ impl Code<'_> {
 
     fn lower_statement(&mut self, stmnt: &Statement) {
         match stmnt {
-            Statement::If {
-                condition,
-                then_body,
-                else_body,
-            } => {
+            Statement::If { condition, then_body, else_body } => {
                 let mut state = RegsState::new(self);
                 let condition = self.lower_expr(condition);
                 let label_then = self.following_instr(1);
@@ -65,10 +59,7 @@ impl Code<'_> {
                     self.bc.nth(end_label).args.jump = self.following_instr(0);
                 }
             }
-            Statement::While {
-                condition,
-                then_body,
-            } => {
+            Statement::While { condition, then_body } => {
                 let cond_label = self.following_instr(0);
                 let condition = self.lower_expr(condition);
                 let while_label = self.bc.emit(Instruction::branch(
@@ -81,10 +72,7 @@ impl Code<'_> {
                 self.bc.emit(Instruction::jump(cond_label));
                 self.bc.nth(while_label).args.branch.2 = self.following_instr(0);
             }
-            Statement::DoWhile {
-                then_body,
-                condition,
-            } => {
+            Statement::DoWhile { then_body, condition } => {
                 let do_label = self.following_instr(0);
                 self.lower_body(then_body);
                 let condition = self.lower_expr(condition);
@@ -209,9 +197,7 @@ struct RegsState {
 
 impl<'a> Bytecode<'a> {
     fn new_in(bump: &'a Bump) -> Self {
-        Self {
-            code: Vec::with_capacity_in(64, bump),
-        }
+        Self { code: Vec::with_capacity_in(64, bump) }
     }
 
     #[inline(always)]
@@ -241,10 +227,7 @@ impl RegsState {
         let old = code.reg_pointer;
         code.reg_pointer = self.reg_pointer;
         code.free_regs.truncate(self.n_free_regs);
-        Self {
-            reg_pointer: old,
-            n_free_regs: self.n_free_regs,
-        }
+        Self { reg_pointer: old, n_free_regs: self.n_free_regs }
     }
     fn scope_hwm<T>(self, code: &mut Code, f: impl FnOnce(&mut Code) -> T) {
         f(code);

@@ -8,8 +8,10 @@
 mod cli;
 mod utils;
 
-use std::env::args_os;
-use std::io::{self, Write};
+use std::{
+    env::args_os,
+    io::{self, Write},
+};
 
 use bumpalo::Bump;
 use clap::Parser as _;
@@ -54,11 +56,7 @@ fn uu_main() -> Result<()> {
     }
     dbg!(arena.chunk_capacity());
 
-    if let Some(Rule {
-        actions: Some(body),
-        pattern: _,
-    }) = ast.rules.first()
-    {
+    if let Some(Rule { actions: Some(body), pattern: _ }) = ast.rules.first() {
         let x = test_interpreter(body);
         if let Err(e) = writeln!(io::stdout(), "---\n{x}")
             && e.kind() != io::ErrorKind::BrokenPipe

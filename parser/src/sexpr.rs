@@ -23,11 +23,7 @@ impl Debug for Statement<'_> {
 
         match self {
             Statement::Simple(simple) => <_ as Debug>::fmt(simple, f),
-            Self::If {
-                condition,
-                then_body,
-                else_body,
-            } => {
+            Self::If { condition, then_body, else_body } => {
                 if alt {
                     write!(f, "(if {condition:?}\n{pad}")?;
                     write!(f, "{then_body:#ni$?}")?;
@@ -46,32 +42,21 @@ impl Debug for Statement<'_> {
                     write!(f, "(if {condition:?} {then_body:?})")
                 }
             }
-            Self::While {
-                condition,
-                then_body,
-            } => {
+            Self::While { condition, then_body } => {
                 if alt {
                     write!(f, "(while {condition:?}\n{pad}{then_body:#ni$?})")
                 } else {
                     write!(f, "(while {condition:?} {then_body:?})")
                 }
             }
-            Self::DoWhile {
-                then_body,
-                condition,
-            } => {
+            Self::DoWhile { then_body, condition } => {
                 if alt {
                     write!(f, "(do-while\n{pad}{then_body:#ni$?}\n{pad}{condition:?})")
                 } else {
                     write!(f, "(do-while {then_body:?} {condition:?})")
                 }
             }
-            Self::For {
-                init,
-                condition,
-                update,
-                body,
-            } => {
+            Self::For { init, condition, update, body } => {
                 write!(f, "(for")?;
                 if alt {
                     let write_fragment = |f: &mut Formatter, x: Option<&dyn Debug>| {
@@ -99,22 +84,14 @@ impl Debug for Statement<'_> {
                     write!(f, " {body:?})")
                 }
             }
-            Self::ForEach {
-                variable,
-                array,
-                body,
-            } => {
+            Self::ForEach { variable, array, body } => {
                 if alt {
                     write!(f, "(for-each {variable:?} {array:?}\n{pad}{body:#ni$?})")
                 } else {
                     write!(f, "(for-each {variable:?} {array:?} {body:?})")
                 }
             }
-            Self::Switch {
-                scrutinee,
-                branches,
-                default,
-            } => {
+            Self::Switch { scrutinee, branches, default } => {
                 if alt {
                     if let Some((dx, i)) = default {
                         write!(
@@ -166,11 +143,7 @@ impl Debug for SimpleStatement<'_> {
                     write!(f, "{expr:?}")
                 }
             }
-            Self::Command {
-                name,
-                args,
-                redirection: Some((rx, expr)),
-            } => {
+            Self::Command { name, args, redirection: Some((rx, expr)) } => {
                 if alt {
                     write!(
                         f,
@@ -182,11 +155,7 @@ impl Debug for SimpleStatement<'_> {
                     write!(f, "({name:?}{:?} ({rx:?} {expr:?}))", ListLispFmt(args))
                 }
             }
-            Self::Command {
-                name,
-                args,
-                redirection: None,
-            } => {
+            Self::Command { name, args, redirection: None } => {
                 write!(f, "({name:?}{:?})", ListLispFmt(args))
             }
 

@@ -84,11 +84,7 @@ impl Display for Statement<'_> {
 
         match self {
             Self::Simple(simple) => <_ as Display>::fmt(simple, f),
-            Self::If {
-                condition,
-                then_body,
-                else_body,
-            } => {
+            Self::If { condition, then_body, else_body } => {
                 write!(f, "if ({condition:ew$}) ")?;
                 write_body(f, then_body, indent)?;
                 if let Some(else_body) = else_body {
@@ -97,27 +93,16 @@ impl Display for Statement<'_> {
                 }
                 Ok(())
             }
-            Self::While {
-                condition,
-                then_body,
-            } => {
+            Self::While { condition, then_body } => {
                 write!(f, "while ({condition:ew$}) ")?;
                 write_body(f, then_body, indent)
             }
-            Self::DoWhile {
-                then_body,
-                condition,
-            } => {
+            Self::DoWhile { then_body, condition } => {
                 write!(f, "do ")?;
                 write_body(f, then_body, indent)?;
                 write!(f, " while ({condition:ew$})")
             }
-            Self::For {
-                init,
-                condition,
-                update,
-                body,
-            } => {
+            Self::For { init, condition, update, body } => {
                 write!(f, "for (")?;
                 if let Some(e) = init {
                     write!(f, "{e:ew$}")?;
@@ -133,19 +118,11 @@ impl Display for Statement<'_> {
                 write!(f, ") ")?;
                 write_body(f, body, indent)
             }
-            Self::ForEach {
-                variable,
-                array,
-                body,
-            } => {
+            Self::ForEach { variable, array, body } => {
                 write!(f, "for ({variable} in {array}) ")?;
                 write_body(f, body, indent)
             }
-            Self::Switch {
-                scrutinee,
-                branches,
-                default,
-            } => {
+            Self::Switch { scrutinee, branches, default } => {
                 writeln!(f, "switch ({scrutinee:ew$}) {{")?;
                 let default_pos = default.as_ref().map_or(branches.len(), |x| x.1);
                 for i in 0..default_pos {
@@ -187,21 +164,13 @@ impl Display for SimpleStatement<'_> {
 
         match self {
             SimpleStatement::Expression(expr) => write!(f, "{expr:ew$}"),
-            SimpleStatement::Command {
-                name,
-                args,
-                redirection: Some((rx, expr)),
-            } => {
+            SimpleStatement::Command { name, args, redirection: Some((rx, expr)) } => {
                 write!(f, "{name}(")?;
                 write_args(f, args, indent)?;
                 write!(f, "){rx}{expr}")?;
                 Ok(())
             }
-            SimpleStatement::Command {
-                name,
-                args,
-                redirection: None,
-            } => {
+            SimpleStatement::Command { name, args, redirection: None } => {
                 write!(f, "{name} ")?;
                 write_args(f, args, indent)
             }

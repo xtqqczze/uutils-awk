@@ -21,8 +21,7 @@ use either::Either::{Left, Right};
 use hashbrown::HashMap;
 use lexer::{LexingError, Span, Token};
 
-pub use crate::ast::*;
-pub use crate::lex::Lexer;
+pub use crate::{ast::*, lex::Lexer};
 use crate::{
     diagnostics::{ParsingError, report_error},
     lex::TokenExt,
@@ -108,10 +107,7 @@ impl<'a> Parser<'a> {
                 }
             } else if lex.peek_is(&Token::OpenBrace) {
                 let actions = Some(self.parse_body(lex)?);
-                self.add_rule(Rule {
-                    pattern: None,
-                    actions,
-                });
+                self.add_rule(Rule { pattern: None, actions });
             } else {
                 match lex.expect_next()? {
                     Token::LoadDirective => {
@@ -260,11 +256,7 @@ impl<'a> Parser<'a> {
                         .consume(&Token::Else)
                         .then(|| self.parse_statement_body(lex))
                         .transpose()?;
-                    Statement::If {
-                        condition,
-                        then_body,
-                        else_body,
-                    }
+                    Statement::If { condition, then_body, else_body }
                 }
                 Token::For => {
                     lex.expect(&Token::OpenParent, ParsingError::ExpectedOpeningParenthesis)?;
@@ -337,28 +329,18 @@ impl<'a> Parser<'a> {
                         _ => {}
                     }
 
-                    Statement::Switch {
-                        scrutinee,
-                        branches,
-                        default,
-                    }
+                    Statement::Switch { scrutinee, branches, default }
                 }
                 Token::While => {
                     let condition = self.parse_parenthesized_expr(lex)?;
                     let then_body = self.parse_statement_body(lex)?;
-                    Statement::While {
-                        condition,
-                        then_body,
-                    }
+                    Statement::While { condition, then_body }
                 }
                 Token::Do => {
                     let then_body = self.parse_body(lex)?;
                     lex.expect(&Token::While, ParsingError::MissingWhileAfterDo)?;
                     let condition = self.parse_parenthesized_expr(lex)?;
-                    Statement::DoWhile {
-                        then_body,
-                        condition,
-                    }
+                    Statement::DoWhile { then_body, condition }
                 }
                 Token::Break => Statement::Break,
                 Token::Continue => Statement::Continue,
@@ -426,12 +408,7 @@ impl<'a> Parser<'a> {
 
         lex.expect(&Token::ClosedParent, ParsingError::InvalidForLoop)?;
         let body = self.parse_statement_body(lex)?;
-        Ok(Statement::For {
-            init,
-            condition,
-            update,
-            body,
-        })
+        Ok(Statement::For { init, condition, update, body })
     }
 
     #[tracing::instrument]
@@ -462,11 +439,7 @@ impl<'a> Parser<'a> {
         )?;
 
         let body = self.parse_statement_body(lex)?;
-        Ok(Statement::ForEach {
-            variable,
-            array,
-            body,
-        })
+        Ok(Statement::ForEach { variable, array, body })
     }
 
     #[tracing::instrument]
@@ -504,11 +477,7 @@ impl<'a> Parser<'a> {
             self.parse_command_args(lex)?
         };
         let redirection = self.parse_command_redirection(lex)?;
-        Ok(SimpleStatement::Command {
-            name,
-            args,
-            redirection,
-        })
+        Ok(SimpleStatement::Command { name, args, redirection })
     }
 
     /// Parses arguments to command or function calls; consumes to the end of

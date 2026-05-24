@@ -12,9 +12,9 @@
 
 pub mod lower;
 
-pub use lower::test_interpreter;
-
 use std::fmt::{Debug, Display};
+
+pub use lower::test_interpreter;
 
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
@@ -113,9 +113,7 @@ impl Instruction {
         debug_assert!(opcode.is_unary());
         Self {
             opcode,
-            args: Arguments {
-                unary_local: (dest, src.reg()),
-            },
+            args: Arguments { unary_local: (dest, src.reg()) },
             hint: src.hint(),
         }
     }
@@ -137,9 +135,7 @@ impl Instruction {
         };
         Self {
             opcode,
-            args: Arguments {
-                binary_local: (dest, lhs.reg(), rhs.reg()),
-            },
+            args: Arguments { binary_local: (dest, lhs.reg(), rhs.reg()) },
             hint,
         }
     }
@@ -149,9 +145,7 @@ impl Instruction {
         debug_assert!(opcode.is_load_store());
         Self {
             opcode,
-            args: Arguments {
-                load_store: (dest, src),
-            },
+            args: Arguments { load_store: (dest, src) },
             hint: Hint::None,
         }
     }
@@ -167,9 +161,7 @@ impl Instruction {
     fn branch(cond: Reg, true_to: Label, false_to: Label) -> Self {
         Self {
             opcode: OpCode::Branch,
-            args: Arguments {
-                branch: (cond, true_to, false_to),
-            },
+            args: Arguments { branch: (cond, true_to, false_to) },
             hint: Hint::None,
         }
     }

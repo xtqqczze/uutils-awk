@@ -24,8 +24,10 @@ fn no_args_fails_code_one() {
 #[cfg(target_os = "linux")]
 #[test]
 fn write_to_dev_full_does_not_panic() {
-    use std::fs::OpenOptions;
-    use std::process::{Command, Stdio};
+    use std::{
+        fs::OpenOptions,
+        process::{Command, Stdio},
+    };
 
     let Ok(dev_full) = OpenOptions::new().write(true).open("/dev/full") else {
         return; // /dev/full not available; skip.

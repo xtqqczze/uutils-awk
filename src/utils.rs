@@ -3,10 +3,12 @@
 // For the full copyright and license information, please view the LICENSE
 // files that was distributed with this source code.
 
-use std::fmt::{Debug, Display};
-use std::io::{self, Write};
-use std::panic::{UnwindSafe, catch_unwind, set_hook, take_hook};
-use std::process::exit;
+use std::{
+    fmt::{Debug, Display},
+    io::{self, Write},
+    panic::{UnwindSafe, catch_unwind, set_hook, take_hook},
+    process::exit,
+};
 
 use color_eyre::config::HookBuilder;
 use tracing_error::ErrorLayer;
