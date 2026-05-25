@@ -3,7 +3,7 @@
 // For the full copyright and license information, please view the LICENSE
 // files that was distributed with this source code.
 
-use std::mem::forget;
+use std::{borrow::Cow, mem::forget};
 
 use bumpalo::{Bump, collections::Vec};
 use parser::{
@@ -38,7 +38,7 @@ pub enum ValueContext {
     Array,
 }
 
-impl Code<'_> {
+impl<'a> Code<'a> {
     fn lower_body(&mut self, body: &Body) {
         for stmnt in &body.0 {
             self.lower_statement(stmnt);
@@ -123,6 +123,43 @@ impl Code<'_> {
                     ));
                     return Hint::UnboxedFloat64;
                 }
+                atom @ (Atom::String(s) | Atom::TypedRegex(s)) => {
+                    let val = if matches!(atom, Atom::String(_)) {
+                        Value::String
+                    } else {
+                        Value::Regex
+                    };
+                    let src = self.register_const(val(Cow::Borrowed(
+                        self.arena.alloc_slice_copy(s.as_ref()),
+                    )));
+                    self.bc.emit(Instruction::load_store(
+                        OpCode::LoadConst,
+                        dest,
+                        src,
+                        ValueContext::Scalar,
+                    ));
+                }
+                Atom::Regex(r) => {
+                    let src = self.register_const(Value::Regex(Cow::Borrowed(
+                        self.arena.alloc_slice_copy(r.as_ref()),
+                    )));
+                    self.bc.emit(Instruction::load_store(
+                        OpCode::LoadConst,
+                        dest,
+                        src,
+                        ValueContext::Scalar,
+                    ));
+                    let dest = LinearReg(dest, Hint::None);
+                    let rec = self.lower_expr(&Expr::Leaf(Atom::Number(0.)), ctx);
+                    self.bc.emit(Instruction::binary(
+                        OpCode::Matches,
+                        dest.reg(),
+                        &rec,
+                        &dest,
+                    ));
+                    forget(dest);
+                    self.free_reg(rec);
+                }
                 _ => todo!(),
             },
             Expr::Node(node) => match node.as_ref() {
@@ -190,7 +227,7 @@ impl Code<'_> {
         self.free_regs.push(reg.into_inner());
     }
 
-    fn register_const(&mut self, value: Value) -> NonLocal {
+    fn register_const(&mut self, value: Value<'a>) -> NonLocal {
         NonLocal(self.consts.0.insert_full(value).0 as u16)
     }
 

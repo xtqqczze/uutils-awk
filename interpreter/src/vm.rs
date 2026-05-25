@@ -36,18 +36,18 @@ pub struct Interpreter<'a> {
 }
 
 #[derive(Debug)]
-pub struct Registers<'a>(Vec<'a, Value>);
+pub struct Registers<'a>(Vec<'a, Value<'a>>);
 
 #[derive(Debug)]
 pub struct SymbolTable<'a> {
-    user: IndexMap<Identifier<'a>, Value, RandomState, &'a Bump>,
+    user: IndexMap<Identifier<'a>, Value<'a>, RandomState, &'a Bump>,
     // separate table for cheap invalidation. It's an arena _visibly shrugs_.
-    records: HashMap<usize, Value, RandomState, &'a Bump>,
+    records: HashMap<usize, Value<'a>, RandomState, &'a Bump>,
     // etc
 }
 
 #[derive(Debug)]
-pub struct Consts<'a>(pub IndexSet<Value, RandomState, &'a Bump>);
+pub struct Consts<'a>(pub IndexSet<Value<'a>, RandomState, &'a Bump>);
 
 impl<'a> Interpreter<'a> {
     pub fn new(compat: ExecMode, code: Code<'a>) -> Self {
@@ -71,7 +71,7 @@ impl<'a> SymbolTable<'a> {
         }
     }
 
-    fn lookup_user_var(&mut self, var: NonLocal, ctx: ValueContext) -> &Value {
+    fn lookup_user_var(&mut self, var: NonLocal, ctx: ValueContext) -> &Value<'a> {
         let v = self.user.get_index_mut(var.0 as _).unwrap().1;
         match ctx {
             ValueContext::Untyped => v,
@@ -80,7 +80,7 @@ impl<'a> SymbolTable<'a> {
         }
     }
 
-    fn write_user_val(&mut self, var: NonLocal, value: Value) {
+    fn write_user_val(&mut self, var: NonLocal, value: Value<'a>) {
         *self.user.get_index_mut(var.0 as _).unwrap().1 = value;
     }
 
@@ -109,30 +109,31 @@ impl Interpreter<'_> {
             match instr {
                 // ix if let Some(&(dest, src)) = ix.get_unary() => {}
                 ix if let Some(&(dest, lhs, rhs)) = ix.get_binary() => {
-                    let lhs = self.registers.get(lhs);
-                    let rhs = self.registers.get(rhs);
-                    let val = match ix.opcode {
-                        OpCode::Add => lhs + rhs,
-                        OpCode::Subtract => lhs - rhs,
-                        OpCode::Multiply => lhs * rhs,
-                        OpCode::Divide => lhs / rhs,
-                        _ => todo!(),
+                    let val = {
+                        let lhs = self.registers.get(lhs);
+                        let rhs = self.registers.get(rhs);
+                        match ix.opcode {
+                            OpCode::Add => lhs + rhs,
+                            OpCode::Subtract => lhs - rhs,
+                            OpCode::Multiply => lhs * rhs,
+                            OpCode::Divide => lhs / rhs,
+                            _ => todo!(),
+                        }
                     };
                     self.registers.write(dest, val);
                 }
                 ix if let Some(&(dest, src)) = ix.get_load_store() => match ix.opcode {
-                    OpCode::LoadConst => self
-                        .registers
-                        .write(dest, self.consts.0.get_index(src.0 as _).unwrap().clone()),
+                    OpCode::LoadConst => {
+                        let val = self.consts.0.get_index(src.0 as _).unwrap().clone();
+                        self.registers.write(dest, val);
+                    }
                     OpCode::LoadUser => {
-                        self.registers.write(
-                            dest,
-                            self.symbols.lookup_user_var(src, ix.hint.into()).clone(),
-                        );
+                        let val = self.symbols.lookup_user_var(src, ix.hint.into()).clone();
+                        self.registers.write(dest, val);
                     }
                     OpCode::StoreUser => {
-                        self.symbols
-                            .write_user_val(src, self.registers.get(dest).clone());
+                        let val = self.registers.get(dest).clone();
+                        self.symbols.write_user_val(src, val);
                     }
                     _ => todo!(),
                 },
@@ -157,18 +158,18 @@ impl Interpreter<'_> {
     }
 }
 
-impl Registers<'_> {
-    fn replace(&mut self, src: Reg, f: impl FnOnce(Value) -> Value) {
+impl<'a> Registers<'a> {
+    fn replace(&mut self, src: Reg, f: impl FnOnce(Value<'a>) -> Value<'a>) {
         let val = replace(self.get_mut(src), Value::Untyped);
         self.write(src, f(val));
     }
-    fn get(&self, src: Reg) -> &Value {
+    fn get(&self, src: Reg) -> &Value<'a> {
         &self.0[src.0 as usize]
     }
-    fn get_mut(&mut self, src: Reg) -> &mut Value {
+    fn get_mut(&mut self, src: Reg) -> &mut Value<'a> {
         &mut self.0[src.0 as usize]
     }
-    fn write(&mut self, dest: Reg, src: Value) {
+    fn write(&mut self, dest: Reg, src: Value<'a>) {
         self.0[dest.0 as usize] = src;
     }
 }

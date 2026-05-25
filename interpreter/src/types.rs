@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     hash::Hash,
     mem::discriminant,
     ops::{Add, Div, Mul, Sub},
@@ -8,16 +9,17 @@ use ahash::RandomState;
 use hashbrown::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Value {
+pub enum Value<'a> {
     Float(f64),
-    String(Vec<u8>),
+    String(Cow<'a, [u8]>),
+    Regex(Cow<'a, [u8]>),
     Array(HashMap<String, Self, RandomState>),
     Bool(bool),
     Untyped,
     Unassigned,
 }
 
-impl Value {
+impl Value<'_> {
     /// Called when loading a variable's value. Forces subsequent uses to be
     /// typed as an AWK scalar (anything that's not an array, basically).
     pub fn scalar_context(&mut self) -> &mut Self {
@@ -62,32 +64,32 @@ impl Value {
     }
 }
 
-impl Add for &'_ Value {
-    type Output = Value;
+impl<'a> Add for &'_ Value<'a> {
+    type Output = Value<'a>;
 
     fn add(self, rhs: Self) -> Self::Output {
         Value::Float(self.to_num() + rhs.to_num())
     }
 }
 
-impl Sub for &'_ Value {
-    type Output = Value;
+impl<'a> Sub for &'_ Value<'a> {
+    type Output = Value<'a>;
 
     fn sub(self, rhs: Self) -> Self::Output {
         Value::Float(self.to_num() - rhs.to_num())
     }
 }
 
-impl Mul for &'_ Value {
-    type Output = Value;
+impl<'a> Mul for &'_ Value<'a> {
+    type Output = Value<'a>;
 
     fn mul(self, rhs: Self) -> Self::Output {
         Value::Float(self.to_num() * rhs.to_num())
     }
 }
 
-impl Div for &'_ Value {
-    type Output = Value;
+impl<'a> Div for &'_ Value<'a> {
+    type Output = Value<'a>;
 
     fn div(self, rhs: Self) -> Self::Output {
         // TODO: panic "nicely" on div by zero.
@@ -95,8 +97,8 @@ impl Div for &'_ Value {
     }
 }
 
-impl Eq for Value {}
-impl Hash for Value {
+impl Eq for Value<'_> {}
+impl Hash for Value<'_> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         discriminant(self).hash(state);
         match self {
