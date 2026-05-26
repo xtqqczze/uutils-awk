@@ -16,8 +16,6 @@ use std::fmt::{Debug, Display};
 
 pub use lower::test_interpreter;
 
-use crate::ir::lower::ValueContext;
-
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
 pub struct NonLocal(pub u16);
@@ -83,7 +81,6 @@ const _: () = const { assert!(size_of::<Instruction>() <= 8) };
 #[repr(C, align(8))]
 pub struct Instruction {
     pub opcode: OpCode,
-    pub hint: Hint,
     pub args: Arguments,
 }
 
@@ -110,61 +107,41 @@ pub type CallArgs = (Reg, NonLocal, ArgCount);
 pub type IndCallArgs = (Reg, Reg, ArgCount);
 
 impl Instruction {
-    fn unary(opcode: impl Into<OpCode>, dest: Reg, src: &impl HintedReg) -> Self {
+    fn unary(opcode: impl Into<OpCode>, dest: Reg, src: Reg) -> Self {
         let opcode = opcode.into();
         debug_assert!(opcode.is_unary());
         Self {
             opcode,
-            args: Arguments { unary_local: (dest, src.reg()) },
-            hint: src.hint(),
+            args: Arguments { unary_local: (dest, src) },
         }
     }
 
-    fn binary(
-        opcode: impl Into<OpCode>,
-        dest: Reg,
-        lhs: &impl HintedReg,
-        rhs: &impl HintedReg,
-    ) -> Self {
+    fn binary(opcode: impl Into<OpCode>, dest: Reg, lhs: Reg, rhs: Reg) -> Self {
         let opcode = opcode.into();
         debug_assert!(opcode.is_binary());
-        let hint = match (lhs.hint(), rhs.hint()) {
-            // TODO: Remove once we get const folding.
-            (Hint::UnboxedFloat64, Hint::UnboxedFloat64) => Hint::UnboxedFloat64,
-            (_, Hint::UnboxedFloat64) => Hint::UnboxedRhsFloat64,
-            (Hint::UnboxedFloat64, _) => Hint::UnboxedLhsFloat64,
-            _ => Hint::None,
-        };
         Self {
             opcode,
-            args: Arguments { binary_local: (dest, lhs.reg(), rhs.reg()) },
-            hint,
+            args: Arguments { binary_local: (dest, lhs, rhs) },
         }
     }
 
-    fn load_store(opcode: impl Into<OpCode>, dest: Reg, src: NonLocal, ctx: ValueContext) -> Self {
+    fn load_store(opcode: impl Into<OpCode>, dest: Reg, src: NonLocal) -> Self {
         let opcode = opcode.into();
         debug_assert!(opcode.is_load_store());
         Self {
             opcode,
             args: Arguments { load_store: (dest, src) },
-            hint: ctx.into(),
         }
     }
 
     fn jump(to: Label) -> Self {
-        Self {
-            opcode: OpCode::Jump,
-            args: Arguments { jump: to },
-            hint: Hint::None,
-        }
+        Self { opcode: OpCode::Jump, args: Arguments { jump: to } }
     }
 
     fn branch(cond: Reg, true_to: Label, false_to: Label) -> Self {
         Self {
             opcode: OpCode::Branch,
             args: Arguments { branch: (cond, true_to, false_to) },
-            hint: Hint::None,
         }
     }
 
@@ -245,42 +222,6 @@ impl OpCode {
 
     fn is_branch(self) -> bool {
         matches!(self, Self::Branch)
-    }
-}
-
-#[repr(u8, align(1))]
-#[derive(Clone, Copy, Debug)]
-pub enum Hint {
-    None = 0,
-    UnboxedFloat64,
-    UnboxedLhsFloat64,
-    UnboxedRhsFloat64,
-    ScalarCtx,
-    ArrayCtx,
-}
-
-trait HintedReg {
-    fn reg(&self) -> Reg;
-    fn hint(&self) -> Hint;
-}
-
-impl From<ValueContext> for Hint {
-    fn from(value: ValueContext) -> Self {
-        match value {
-            ValueContext::Scalar => Self::ScalarCtx,
-            ValueContext::Array => Self::ArrayCtx,
-            ValueContext::Untyped => Self::None,
-        }
-    }
-}
-
-impl From<Hint> for ValueContext {
-    fn from(value: Hint) -> Self {
-        match value {
-            Hint::ScalarCtx => Self::Scalar,
-            Hint::ArrayCtx => Self::Array,
-            _ => Self::Untyped,
-        }
     }
 }
 
@@ -365,15 +306,6 @@ impl Display for Instruction {
                 write!(f, "{op} {label}")
             }
             _ => todo!(),
-        }?;
-        match self.hint {
-            Hint::UnboxedFloat64 if self.opcode.is_binary() => write!(f, " @ all_unboxedf64"),
-            Hint::UnboxedFloat64 => write!(f, " @ all_unboxedf64"),
-            Hint::UnboxedLhsFloat64 => write!(f, " @ lhs_unboxedf64"),
-            Hint::UnboxedRhsFloat64 => write!(f, " @ rhs_unboxedf64"),
-            Hint::ScalarCtx => write!(f, "@ scalar_ctx"),
-            Hint::ArrayCtx => write!(f, "@ array_ctx"),
-            Hint::None => Ok(()),
         }
     }
 }

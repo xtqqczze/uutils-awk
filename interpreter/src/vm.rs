@@ -18,7 +18,7 @@ use parser::Identifier;
 use crate::{
     ir::{
         Label, NonLocal, OpCode, Reg,
-        lower::{Bytecode, Code, ValueContext},
+        lower::{Bytecode, Code},
     },
     types::Value,
 };
@@ -77,13 +77,9 @@ impl<'a> SymbolTable<'a> {
         }
     }
 
-    fn lookup_user_var(&mut self, var: NonLocal, ctx: ValueContext) -> &Value<'a> {
+    fn lookup_user_scalar(&mut self, var: NonLocal) -> &Value<'a> {
         let v = self.user.get_index_mut(var.0 as _).unwrap().1;
-        match ctx {
-            ValueContext::Untyped => v,
-            ValueContext::Scalar => v.scalar_context(),
-            ValueContext::Array => v.array_context(),
-        }
+        v.scalar_context()
     }
 
     fn write_user_val(&mut self, var: NonLocal, value: Value<'a>) {
@@ -163,7 +159,7 @@ impl Interpreter<'_> {
                         self.registers.write(dest, val);
                     }
                     OpCode::LoadUser => {
-                        let val = self.symbols.lookup_user_var(src, ix.hint.into()).clone();
+                        let val = self.symbols.lookup_user_scalar(src).clone();
                         self.registers.write(dest, val);
                     }
                     OpCode::StoreUser => {

@@ -3,7 +3,7 @@
 // For the full copyright and license information, please view the LICENSE
 // files that was distributed with this source code.
 
-use std::{borrow::Cow, mem::forget};
+use std::{borrow::Cow, mem::forget, ops::Deref};
 
 use bumpalo::{Bump, collections::Vec};
 use parser::{
@@ -12,7 +12,7 @@ use parser::{
 };
 
 use crate::{
-    ir::{Hint, HintedReg, Instruction, Label, NonLocal, OpCode, Reg},
+    ir::{Instruction, Label, NonLocal, OpCode, Reg},
     types::Value,
     vm::{Consts, ExecMode, Interpreter, SymbolTable},
 };
@@ -29,14 +29,8 @@ pub struct Code<'arena> {
 
 #[must_use]
 #[derive(Debug)]
-struct LinearReg(Reg, Hint);
-
-#[derive(Clone, Copy)]
-pub enum ValueContext {
-    Untyped,
-    Scalar,
-    Array,
-}
+#[repr(transparent)]
+struct LinearReg(Reg);
 
 impl<'a> Code<'a> {
     fn lower_body(&mut self, body: &Body) {
@@ -49,11 +43,11 @@ impl<'a> Code<'a> {
         match stmnt {
             Statement::If { condition, then_body, else_body } => {
                 let mut state = RegsState::new(self);
-                let condition = self.lower_expr(condition, ValueContext::Scalar);
+                let condition = self.lower_expr(condition);
                 let label_then = self.following_instr(1);
-                let if_label =
-                    self.bc
-                        .emit(Instruction::branch(condition.reg(), label_then, Label(0)));
+                let if_label = self
+                    .bc
+                    .emit(Instruction::branch(*condition, label_then, Label(0)));
                 self.free_reg(condition);
                 self.lower_body(then_body);
                 self.bc.nth(if_label).args.branch.2 = self.following_instr(0);
@@ -68,9 +62,9 @@ impl<'a> Code<'a> {
             }
             Statement::While { condition, then_body } => {
                 let cond_label = self.following_instr(0);
-                let condition = self.lower_expr(condition, ValueContext::Scalar);
+                let condition = self.lower_expr(condition);
                 let while_label = self.bc.emit(Instruction::branch(
-                    condition.reg(),
+                    *condition,
                     self.following_instr(1),
                     Label(0),
                 ));
@@ -82,9 +76,9 @@ impl<'a> Code<'a> {
             Statement::DoWhile { then_body, condition } => {
                 let do_label = self.following_instr(0);
                 self.lower_body(then_body);
-                let condition = self.lower_expr(condition, ValueContext::Scalar);
+                let condition = self.lower_expr(condition);
                 self.bc.emit(Instruction::branch(
-                    condition.reg(),
+                    *condition,
                     do_label,
                     self.following_instr(1),
                 ));
@@ -92,20 +86,20 @@ impl<'a> Code<'a> {
             }
             Statement::For { init, condition, update, body } => {
                 if let Some(SimpleStatement::Expression(expr)) = init {
-                    let reg = self.lower_expr(expr, ValueContext::Untyped);
+                    let reg = self.lower_expr(expr);
                     self.free_reg(reg);
                 }
                 let cond_label = self.following_instr(0);
                 if let Some(condition) = condition {
-                    let condition = self.lower_expr(condition, ValueContext::Scalar);
+                    let condition = self.lower_expr(condition);
                     let body_label = self.following_instr(1);
                     let while_label =
                         self.bc
-                            .emit(Instruction::branch(condition.reg(), body_label, Label(0)));
+                            .emit(Instruction::branch(*condition, body_label, Label(0)));
                     self.free_reg(condition);
                     self.lower_body(body);
                     if let Some(SimpleStatement::Expression(expr)) = update {
-                        let reg = self.lower_expr(expr, ValueContext::Untyped);
+                        let reg = self.lower_expr(expr);
                         self.free_reg(reg);
                     }
                     self.bc.emit(Instruction::jump(cond_label));
@@ -113,44 +107,38 @@ impl<'a> Code<'a> {
                 } else {
                     self.lower_body(body);
                     if let Some(SimpleStatement::Expression(expr)) = update {
-                        let reg = self.lower_expr(expr, ValueContext::Untyped);
+                        let reg = self.lower_expr(expr);
                         self.free_reg(reg);
                     }
                     self.bc.emit(Instruction::jump(cond_label));
                 }
             }
             Statement::Simple(SimpleStatement::Expression(expr)) => {
-                let reg = self.lower_expr(expr, ValueContext::Untyped);
+                let reg = self.lower_expr(expr);
                 self.free_reg(reg);
             }
             _ => todo!(),
         }
     }
 
-    fn lower_expr(&mut self, expr: &Expr, ctx: ValueContext) -> LinearReg {
-        let mut dest = self.alloc_reg();
-        let hint = self.lower_expr_into(expr, dest.reg(), ctx);
-        dest.1 = hint;
+    fn lower_expr(&mut self, expr: &Expr) -> LinearReg {
+        let dest = self.alloc_reg();
+        self.lower_expr_into(expr, *dest);
         dest
     }
 
-    fn lower_expr_into(&mut self, expr: &Expr, dest: Reg, ctx: ValueContext) -> Hint {
+    fn lower_expr_into(&mut self, expr: &Expr, dest: Reg) {
         match expr {
             Expr::Leaf(atom) => match atom {
                 Atom::Variable(Variable::User(ident)) => {
                     let src = self.symbols.register_user_var(ident, self.arena);
                     self.bc
-                        .emit(Instruction::load_store(OpCode::LoadUser, dest, src, ctx));
+                        .emit(Instruction::load_store(OpCode::LoadUser, dest, src));
                 }
                 &Atom::Number(n) => {
                     let src = self.register_const(Value::Float(n));
-                    self.bc.emit(Instruction::load_store(
-                        OpCode::LoadConst,
-                        dest,
-                        src,
-                        ValueContext::Scalar,
-                    ));
-                    return Hint::UnboxedFloat64;
+                    self.bc
+                        .emit(Instruction::load_store(OpCode::LoadConst, dest, src));
                 }
                 atom @ (Atom::String(s) | Atom::TypedRegex(s)) => {
                     let val = if matches!(atom, Atom::String(_)) {
@@ -161,51 +149,37 @@ impl<'a> Code<'a> {
                     let src = self.register_const(val(Cow::Borrowed(
                         self.arena.alloc_slice_copy(s.as_ref()),
                     )));
-                    self.bc.emit(Instruction::load_store(
-                        OpCode::LoadConst,
-                        dest,
-                        src,
-                        ValueContext::Scalar,
-                    ));
+                    self.bc
+                        .emit(Instruction::load_store(OpCode::LoadConst, dest, src));
                 }
                 Atom::Regex(r) => {
                     let src = self.register_const(Value::Regex(Cow::Borrowed(
                         self.arena.alloc_slice_copy(r.as_ref()),
                     )));
-                    self.bc.emit(Instruction::load_store(
-                        OpCode::LoadConst,
-                        dest,
-                        src,
-                        ValueContext::Scalar,
-                    ));
-                    let dest = LinearReg(dest, Hint::None);
-                    let rec = self.lower_expr(&Expr::Leaf(Atom::Number(0.)), ctx);
-                    self.bc.emit(Instruction::binary(
-                        OpCode::Matches,
-                        dest.reg(),
-                        &rec,
-                        &dest,
-                    ));
-                    forget(dest);
+                    self.bc
+                        .emit(Instruction::load_store(OpCode::LoadConst, dest, src));
+                    let rec = self.lower_expr(&Expr::Leaf(Atom::Number(0.)));
+                    self.bc
+                        .emit(Instruction::binary(OpCode::Matches, dest, *rec, dest));
                     self.free_reg(rec);
                 }
                 _ => todo!(),
             },
             Expr::Node(node) => match node.as_ref() {
                 ExprNode::UnaryOperation(op, expr) => {
-                    let src = self.lower_expr(expr, ValueContext::Scalar);
-                    self.bc.emit(Instruction::unary(*op, dest, &src));
+                    let src = self.lower_expr(expr);
+                    self.bc.emit(Instruction::unary(*op, dest, *src));
                     self.free_reg(src);
                 }
                 ExprNode::BinaryOperation(op, lhs, rhs) => {
-                    let lhs = self.lower_expr(lhs, ValueContext::Scalar);
-                    let rhs = self.lower_expr(rhs, ValueContext::Scalar);
-                    self.bc.emit(Instruction::binary(*op, dest, &lhs, &rhs));
+                    let lhs = self.lower_expr(lhs);
+                    let rhs = self.lower_expr(rhs);
+                    self.bc.emit(Instruction::binary(*op, dest, *lhs, *rhs));
                     self.free_reg(lhs);
                     self.free_reg(rhs);
                 }
                 ExprNode::Ternary(cond, true_then, false_then) => {
-                    self.lower_expr_into(cond, dest, ValueContext::Scalar);
+                    self.lower_expr_into(cond, dest);
 
                     let mut state = RegsState::new(self);
                     let branch =
@@ -213,43 +187,39 @@ impl<'a> Code<'a> {
                             .emit(Instruction::branch(dest, self.following_instr(1), Label(0)));
 
                     state = state.scope(self, |c| {
-                        c.lower_expr_into(true_then, dest, ValueContext::Scalar)
+                        c.lower_expr_into(true_then, dest);
                     });
 
                     let jump = self.bc.emit(Instruction::jump(Label(0)));
                     let label = self.following_instr(0);
 
                     state.scope_hwm(self, |c| {
-                        c.lower_expr_into(false_then, dest, ValueContext::Scalar)
+                        c.lower_expr_into(false_then, dest);
                     });
 
                     self.bc.nth(branch).args.branch.2 = label;
                     self.bc.nth(jump).args.jump = self.following_instr(0);
                 }
                 ExprNode::BinaryPlaceOperation(BinaryPlaceOperator::Assignment, place, expr) => {
-                    self.lower_expr_into(expr, dest, ctx);
+                    self.lower_expr_into(expr, dest);
                     let Place::Variable(Variable::User(var)) = place else {
                         todo!()
                     };
                     let var = self.symbols.register_user_var(var, self.arena);
                     self.bc
-                        .emit(Instruction::load_store(OpCode::StoreUser, dest, var, ctx));
+                        .emit(Instruction::load_store(OpCode::StoreUser, dest, var));
                 }
                 _ => todo!(),
             },
         }
-        Hint::None
     }
 
     fn alloc_reg(&mut self) -> LinearReg {
-        self.free_regs
-            .pop()
-            .map(|r| LinearReg(r, Hint::None))
-            .unwrap_or_else(|| {
-                let current = self.reg_pointer;
-                self.reg_pointer += 1;
-                LinearReg(Reg(current), Hint::None)
-            })
+        self.free_regs.pop().map(LinearReg).unwrap_or_else(|| {
+            let current = self.reg_pointer;
+            self.reg_pointer += 1;
+            LinearReg(Reg(current))
+        })
     }
 
     fn free_reg(&mut self, reg: LinearReg) {
@@ -381,23 +351,13 @@ impl LinearReg {
     }
 }
 
-impl HintedReg for LinearReg {
-    fn reg(&self) -> Reg {
-        self.0
-    }
+impl Deref for LinearReg {
+    type Target = Reg;
 
-    fn hint(&self) -> Hint {
-        self.1
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
-
-// impl Deref for Reg {
-//     type Target = Self;
-
-//     fn deref(&self) -> &Self::Target {
-//         self
-//     }
-// }
 
 #[cfg(debug_assertions)]
 impl Drop for LinearReg {
