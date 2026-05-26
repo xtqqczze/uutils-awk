@@ -17,7 +17,7 @@ use parser::Identifier;
 
 use crate::{
     ir::{
-        Label, NonLocal, OpCode, Reg,
+        Instruction, Label, NonLocal, Reg,
         lower::{Bytecode, Code},
     },
     types::Value,
@@ -107,81 +107,98 @@ impl<'a> Consts<'a> {
 
 impl Interpreter<'_> {
     pub fn run(&mut self) {
-        while let Some(instr) = self.bc.code.get(self.program_counter) {
+        macro_rules! rx {
+            (self, $dest:expr, $src:ident, $e:expr) => {{
+                let $src = self.registers.get($src);
+                self.registers.write($dest, $e);
+            }};
+            (self, $lhs:ident, $rhs:ident) => {
+                let ($lhs, $rhs) = (self.registers.get($lhs), self.registers.get($rhs));
+            };
+            (self, $dest:expr, $lhs:ident, $rhs:ident, $e:expr) => {{
+                rx!(self, $lhs, $rhs);
+                self.registers.write($dest, $e);
+            }};
+        }
+        while let Some(&instr) = self.bc.code.get(self.program_counter) {
             match instr {
-                ix if let Some(&(dest, src)) = ix.get_unary() => {
-                    let src = self.registers.get(src);
-                    let val = match ix.opcode {
-                        OpCode::Record => todo!(),
-                        OpCode::Negation => Value::b2f(!src.to_bool()),
-                        OpCode::ToInt => Value::Float(src.to_num()),
-                        OpCode::Negative => Value::Float(-src.to_num()),
-                        _ => unreachable!(),
-                    };
+                Instruction::Record(_) => todo!(),
+                Instruction::Negation((dest, src)) => {
+                    rx!(self, dest, src, Value::b2f(src.to_bool()));
+                }
+                Instruction::ToInt((dest, src)) => {
+                    rx!(self, dest, src, Value::Float(src.to_num()));
+                }
+                Instruction::Negative((dest, src)) => {
+                    rx!(self, dest, src, Value::Float(src.to_num()));
+                }
+                Instruction::Copy((dest, src)) => rx!(self, dest, src, src.clone()),
+                Instruction::Eq((dest, lhs, rhs)) => {
+                    rx!(self, dest, lhs, rhs, Value::b2f(lhs == rhs));
+                }
+                Instruction::NEq((dest, lhs, rhs)) => {
+                    rx!(self, dest, lhs, rhs, Value::b2f(lhs != rhs));
+                }
+                Instruction::Gt((dest, lhs, rhs)) => {
+                    rx!(self, dest, lhs, rhs, Value::b2f(lhs > rhs));
+                }
+                Instruction::Lt((dest, lhs, rhs)) => {
+                    rx!(self, dest, lhs, rhs, Value::b2f(lhs < rhs));
+                }
+                Instruction::LtE((dest, lhs, rhs)) => {
+                    rx!(self, dest, lhs, rhs, Value::b2f(lhs <= rhs));
+                }
+                Instruction::GtE((dest, lhs, rhs)) => {
+                    rx!(self, dest, lhs, rhs, Value::b2f(lhs >= rhs));
+                }
+                Instruction::And((_dest, _lhs, _rhs)) => todo!(),
+                Instruction::Or((_dest, _lhs, _rhs)) => todo!(),
+                Instruction::Matches((_dest, _lhs, _rhs)) => todo!(),
+                Instruction::MatchesNot((_dest, _lhs, _rhs)) => todo!(),
+                Instruction::Add((dest, lhs, rhs)) => rx!(self, dest, lhs, rhs, lhs + rhs),
+                Instruction::Subtract((dest, lhs, rhs)) => rx!(self, dest, lhs, rhs, lhs - rhs),
+                Instruction::Multiply((dest, lhs, rhs)) => rx!(self, dest, lhs, rhs, lhs * rhs),
+                Instruction::Divide((dest, lhs, rhs)) => rx!(self, dest, lhs, rhs, lhs / rhs),
+                Instruction::Raise((dest, lhs, rhs)) => rx!(self, dest, lhs, rhs, lhs ^ rhs),
+                Instruction::Modulo((dest, lhs, rhs)) => rx!(self, dest, lhs, rhs, lhs % rhs),
+                Instruction::Concat((dest, lhs, rhs)) => {
+                    rx!(self, lhs, rhs);
+                    let mut buf =
+                        StdVec::with_capacity(lhs.string_size_hint() + rhs.string_size_hint());
+                    lhs.write_string(&mut buf);
+                    rhs.write_string(&mut buf);
+                    self.registers.write(dest, Value::String(buf.into()));
+                }
+                Instruction::LoadUser((dest, src)) => {
+                    let val = self.symbols.lookup_user_scalar(src);
+                    self.registers.write(dest, val.clone());
+                }
+                Instruction::LoadBultin((_dest, _src)) => todo!(),
+                Instruction::LoadConst((dest, src)) => {
+                    let val = self.consts.0.get_index(src.0 as _).unwrap().clone();
                     self.registers.write(dest, val);
                 }
-                ix if let Some(&(dest, lhs, rhs)) = ix.get_binary() => {
-                    let lhs = self.registers.get(lhs);
-                    let rhs = self.registers.get(rhs);
-                    let val = match ix.opcode {
-                        OpCode::Add => lhs + rhs,
-                        OpCode::Subtract => lhs - rhs,
-                        OpCode::Multiply => lhs * rhs,
-                        OpCode::Divide => lhs / rhs,
-                        OpCode::Raise => lhs ^ rhs,
-                        OpCode::Modulo => lhs % rhs,
-                        // Float values on boolean cmps are intentional.
-                        OpCode::Eq => Value::b2f(lhs == rhs),
-                        OpCode::NEq => Value::b2f(lhs != rhs),
-                        OpCode::Gt => Value::b2f(lhs > rhs),
-                        OpCode::Lt => Value::b2f(lhs < rhs),
-                        OpCode::GtE => Value::b2f(lhs >= rhs),
-                        OpCode::LtE => Value::b2f(lhs <= rhs),
-                        OpCode::And => todo!(),
-                        OpCode::Or => todo!(),
-                        OpCode::Matches => todo!(),
-                        OpCode::MatchesNot => todo!(),
-                        OpCode::Concat => {
-                            let mut buf = StdVec::with_capacity(
-                                lhs.string_size_hint() + rhs.string_size_hint(),
-                            );
-                            lhs.write_string(&mut buf);
-                            rhs.write_string(&mut buf);
-                            Value::String(buf.into())
-                        }
-                        _ => unreachable!(),
-                    };
-                    self.registers.write(dest, val);
+                Instruction::StoreUser((dest, src)) => {
+                    let val = self.registers.get(dest).clone();
+                    self.symbols.write_user_val(src, val);
                 }
-                ix if let Some(&(dest, src)) = ix.get_load_store() => match ix.opcode {
-                    OpCode::LoadConst => {
-                        let val = self.consts.0.get_index(src.0 as _).unwrap().clone();
-                        self.registers.write(dest, val);
-                    }
-                    OpCode::LoadUser => {
-                        let val = self.symbols.lookup_user_scalar(src).clone();
-                        self.registers.write(dest, val);
-                    }
-                    OpCode::StoreUser => {
-                        let val = self.registers.get(dest).clone();
-                        self.symbols.write_user_val(src, val);
-                    }
-                    _ => todo!(),
-                },
-                ix if let Some((cond, Label(true_to), Label(false_to))) = ix.get_branch() => {
-                    let label = if self.registers.get(*cond).to_bool() {
-                        *true_to
+                Instruction::StoreBuiltin((_dest, _src)) => todo!(),
+                Instruction::IntrinsicCall((_dest, _code, _args)) => todo!(),
+                Instruction::UserCall((_dest, _code, _args)) => todo!(),
+                Instruction::IndirectCall((_dest, _code, _args)) => todo!(),
+                Instruction::Jump(Label(label)) => {
+                    self.program_counter = label as _;
+                    continue;
+                }
+                Instruction::Return(_src) => todo!(),
+                Instruction::Branch((src, Label(true_to), Label(false_to))) => {
+                    if self.registers.get(src).to_bool() {
+                        self.program_counter = true_to as _;
                     } else {
-                        *false_to
-                    };
-                    self.program_counter = label as _;
+                        self.program_counter = false_to as _;
+                    }
                     continue;
                 }
-                ix if let Some(&Label(label)) = ix.get_jump() => {
-                    self.program_counter = label as _;
-                    continue;
-                }
-                ix => todo!("{ix:?}"),
             }
             self.program_counter += 1;
         }

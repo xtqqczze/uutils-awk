@@ -12,7 +12,7 @@ use parser::{
 };
 
 use crate::{
-    ir::{Instruction, Label, NonLocal, OpCode, Reg},
+    ir::{BinaryArg, Instruction, Label, NonLocal, Reg, UnaryArg},
     types::Value,
     vm::{Consts, ExecMode, Interpreter, SymbolTable},
 };
@@ -45,43 +45,46 @@ impl<'a> Code<'a> {
                 let mut state = RegsState::new(self);
                 let condition = self.lower_expr(condition);
                 let label_then = self.following_instr(1);
-                let if_label = self
-                    .bc
-                    .emit(Instruction::branch(*condition, label_then, Label(0)));
+                let if_label =
+                    self.bc
+                        .emit(Instruction::Branch((*condition, label_then, Label(0))));
                 self.free_reg(condition);
                 self.lower_body(then_body);
-                self.bc.nth(if_label).args.branch.2 = self.following_instr(0);
+                let next = self.following_instr(0);
+                self.bc.nth(if_label).set_label(next);
 
                 if let Some(else_body) = else_body {
                     state.reg_pointer += 1;
-                    unsafe { self.bc.nth(if_label).args.branch.2.0 += 1 };
-                    let end_label = self.bc.emit(Instruction::jump(Label(0)));
+                    self.bc.nth(if_label).push_start_label();
+                    let end_label = self.bc.emit(Instruction::Jump(Label(0)));
                     state.scope_hwm(self, |c| c.lower_body(else_body));
-                    self.bc.nth(end_label).args.jump = self.following_instr(0);
+                    let next = self.following_instr(0);
+                    self.bc.nth(end_label).set_label(next);
                 }
             }
             Statement::While { condition, then_body } => {
                 let cond_label = self.following_instr(0);
                 let condition = self.lower_expr(condition);
-                let while_label = self.bc.emit(Instruction::branch(
+                let while_label = self.bc.emit(Instruction::Branch((
                     *condition,
                     self.following_instr(1),
                     Label(0),
-                ));
+                )));
                 self.free_reg(condition);
                 self.lower_body(then_body);
-                self.bc.emit(Instruction::jump(cond_label));
-                self.bc.nth(while_label).args.branch.2 = self.following_instr(0);
+                self.bc.emit(Instruction::Jump(cond_label));
+                let next = self.following_instr(0);
+                self.bc.nth(while_label).set_label(next);
             }
             Statement::DoWhile { then_body, condition } => {
                 let do_label = self.following_instr(0);
                 self.lower_body(then_body);
                 let condition = self.lower_expr(condition);
-                self.bc.emit(Instruction::branch(
+                self.bc.emit(Instruction::Branch((
                     *condition,
                     do_label,
                     self.following_instr(1),
-                ));
+                )));
                 self.free_reg(condition);
             }
             Statement::For { init, condition, update, body } => {
@@ -95,22 +98,23 @@ impl<'a> Code<'a> {
                     let body_label = self.following_instr(1);
                     let while_label =
                         self.bc
-                            .emit(Instruction::branch(*condition, body_label, Label(0)));
+                            .emit(Instruction::Branch((*condition, body_label, Label(0))));
                     self.free_reg(condition);
                     self.lower_body(body);
                     if let Some(SimpleStatement::Expression(expr)) = update {
                         let reg = self.lower_expr(expr);
                         self.free_reg(reg);
                     }
-                    self.bc.emit(Instruction::jump(cond_label));
-                    self.bc.nth(while_label).args.branch.2 = self.following_instr(0);
+                    self.bc.emit(Instruction::Jump(cond_label));
+                    let next = self.following_instr(0);
+                    self.bc.nth(while_label).set_label(next);
                 } else {
                     self.lower_body(body);
                     if let Some(SimpleStatement::Expression(expr)) = update {
                         let reg = self.lower_expr(expr);
                         self.free_reg(reg);
                     }
-                    self.bc.emit(Instruction::jump(cond_label));
+                    self.bc.emit(Instruction::Jump(cond_label));
                 }
             }
             Statement::Simple(SimpleStatement::Expression(expr)) => {
@@ -132,13 +136,11 @@ impl<'a> Code<'a> {
             Expr::Leaf(atom) => match atom {
                 Atom::Variable(Variable::User(ident)) => {
                     let src = self.symbols.register_user_var(ident, self.arena);
-                    self.bc
-                        .emit(Instruction::load_store(OpCode::LoadUser, dest, src));
+                    self.bc.emit(Instruction::LoadUser((dest, src)));
                 }
                 &Atom::Number(n) => {
                     let src = self.register_const(Value::Float(n));
-                    self.bc
-                        .emit(Instruction::load_store(OpCode::LoadConst, dest, src));
+                    self.bc.emit(Instruction::LoadConst((dest, src)));
                 }
                 atom @ (Atom::String(s) | Atom::TypedRegex(s)) => {
                     let val = if matches!(atom, Atom::String(_)) {
@@ -149,18 +151,15 @@ impl<'a> Code<'a> {
                     let src = self.register_const(val(Cow::Borrowed(
                         self.arena.alloc_slice_copy(s.as_ref()),
                     )));
-                    self.bc
-                        .emit(Instruction::load_store(OpCode::LoadConst, dest, src));
+                    self.bc.emit(Instruction::LoadConst((dest, src)));
                 }
                 Atom::Regex(r) => {
                     let src = self.register_const(Value::Regex(Cow::Borrowed(
                         self.arena.alloc_slice_copy(r.as_ref()),
                     )));
-                    self.bc
-                        .emit(Instruction::load_store(OpCode::LoadConst, dest, src));
+                    self.bc.emit(Instruction::LoadConst((dest, src)));
                     let rec = self.lower_expr(&Expr::Leaf(Atom::Number(0.)));
-                    self.bc
-                        .emit(Instruction::binary(OpCode::Matches, dest, *rec, dest));
+                    self.bc.emit(Instruction::Matches((dest, *rec, dest)));
                     self.free_reg(rec);
                 }
                 _ => todo!(),
@@ -168,13 +167,13 @@ impl<'a> Code<'a> {
             Expr::Node(node) => match node.as_ref() {
                 ExprNode::UnaryOperation(op, expr) => {
                     let src = self.lower_expr(expr);
-                    self.bc.emit(Instruction::unary(*op, dest, *src));
+                    self.bc.emit(Instruction::from((*op, (dest, *src))));
                     self.free_reg(src);
                 }
                 ExprNode::BinaryOperation(op, lhs, rhs) => {
                     let lhs = self.lower_expr(lhs);
                     let rhs = self.lower_expr(rhs);
-                    self.bc.emit(Instruction::binary(*op, dest, *lhs, *rhs));
+                    self.bc.emit(Instruction::from((*op, (dest, *lhs, *rhs))));
                     self.free_reg(lhs);
                     self.free_reg(rhs);
                 }
@@ -182,23 +181,26 @@ impl<'a> Code<'a> {
                     self.lower_expr_into(cond, dest);
 
                     let mut state = RegsState::new(self);
-                    let branch =
-                        self.bc
-                            .emit(Instruction::branch(dest, self.following_instr(1), Label(0)));
+                    let branch = self.bc.emit(Instruction::Branch((
+                        dest,
+                        self.following_instr(1),
+                        Label(0),
+                    )));
 
                     state = state.scope(self, |c| {
                         c.lower_expr_into(true_then, dest);
                     });
 
-                    let jump = self.bc.emit(Instruction::jump(Label(0)));
+                    let jump = self.bc.emit(Instruction::Jump(Label(0)));
                     let label = self.following_instr(0);
 
                     state.scope_hwm(self, |c| {
                         c.lower_expr_into(false_then, dest);
                     });
 
-                    self.bc.nth(branch).args.branch.2 = label;
-                    self.bc.nth(jump).args.jump = self.following_instr(0);
+                    self.bc.nth(branch).set_label(label);
+                    let next = self.following_instr(0);
+                    self.bc.nth(jump).set_label(next);
                 }
                 ExprNode::BinaryPlaceOperation(BinaryPlaceOperator::Assignment, place, expr) => {
                     self.lower_expr_into(expr, dest);
@@ -206,8 +208,7 @@ impl<'a> Code<'a> {
                         todo!()
                     };
                     let var = self.symbols.register_user_var(var, self.arena);
-                    self.bc
-                        .emit(Instruction::load_store(OpCode::StoreUser, dest, var));
+                    self.bc.emit(Instruction::StoreUser((dest, var)));
                 }
                 _ => todo!(),
             },
@@ -303,37 +304,37 @@ pub fn test_interpreter(stmnt: &Body<'_>) -> String {
     vm.to_string()
 }
 
-impl From<UnaryOperator> for OpCode {
-    fn from(value: UnaryOperator) -> Self {
-        match value {
-            UnaryOperator::Record => Self::Record,
-            UnaryOperator::Negation => Self::Negation,
-            UnaryOperator::ToInt => Self::ToInt,
-            UnaryOperator::Negative => Self::Negative,
+impl From<(UnaryOperator, UnaryArg)> for Instruction {
+    fn from((op, args): (UnaryOperator, UnaryArg)) -> Self {
+        match op {
+            UnaryOperator::Record => Self::Record(args),
+            UnaryOperator::Negation => Self::Negation(args),
+            UnaryOperator::ToInt => Self::ToInt(args),
+            UnaryOperator::Negative => Self::Negative(args),
         }
     }
 }
 
-impl From<BinaryOperator> for OpCode {
-    fn from(value: BinaryOperator) -> Self {
-        match value {
-            BinaryOperator::Concat => Self::Concat,
-            BinaryOperator::Eq => Self::Eq,
-            BinaryOperator::NEq => Self::NEq,
-            BinaryOperator::Gt => Self::Gt,
-            BinaryOperator::Lt => Self::Lt,
-            BinaryOperator::LtE => Self::LtE,
-            BinaryOperator::GtE => Self::GtE,
-            BinaryOperator::And => Self::And,
-            BinaryOperator::Or => Self::Or,
-            BinaryOperator::Matches => Self::Matches,
-            BinaryOperator::MatchesNot => Self::MatchesNot,
-            BinaryOperator::Add => Self::Add,
-            BinaryOperator::Subtract => Self::Subtract,
-            BinaryOperator::Multiply => Self::Multiply,
-            BinaryOperator::Divide => Self::Divide,
-            BinaryOperator::Raise => Self::Raise,
-            BinaryOperator::Modulo => Self::Modulo,
+impl From<(BinaryOperator, BinaryArg)> for Instruction {
+    fn from((op, args): (BinaryOperator, BinaryArg)) -> Self {
+        match op {
+            BinaryOperator::Concat => Self::Concat(args),
+            BinaryOperator::Eq => Self::Eq(args),
+            BinaryOperator::NEq => Self::NEq(args),
+            BinaryOperator::Gt => Self::Gt(args),
+            BinaryOperator::Lt => Self::Lt(args),
+            BinaryOperator::LtE => Self::LtE(args),
+            BinaryOperator::GtE => Self::GtE(args),
+            BinaryOperator::And => Self::And(args),
+            BinaryOperator::Or => Self::Or(args),
+            BinaryOperator::Matches => Self::Matches(args),
+            BinaryOperator::MatchesNot => Self::MatchesNot(args),
+            BinaryOperator::Add => Self::Add(args),
+            BinaryOperator::Subtract => Self::Subtract(args),
+            BinaryOperator::Multiply => Self::Multiply(args),
+            BinaryOperator::Divide => Self::Divide(args),
+            BinaryOperator::Raise => Self::Raise(args),
+            BinaryOperator::Modulo => Self::Modulo(args),
         }
     }
 }

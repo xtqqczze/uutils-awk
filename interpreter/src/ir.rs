@@ -32,70 +32,50 @@ pub struct Label(pub u16);
 #[repr(transparent)]
 pub struct ArgCount(u16);
 
-#[repr(u8, align(1))]
+#[repr(u8, C, align(8))]
 #[derive(Clone, Copy, Debug)]
-pub enum OpCode {
+pub enum Instruction {
     // Unary operations
-    Record,
-    Negation,
-    ToInt,
-    Negative,
+    Record(UnaryArg),
+    Negation(UnaryArg),
+    ToInt(UnaryArg),
+    Negative(UnaryArg),
+    Copy(UnaryArg),
 
     // Binary operations
-    Eq,
-    NEq,
-    Gt,
-    Lt,
-    LtE,
-    GtE,
-    And,
-    Or,
-    Matches,
-    MatchesNot,
-    Add,
-    Subtract,
-    Multiply,
-    Divide,
-    Raise,
-    Modulo,
-    Concat,
+    Eq(BinaryArg),
+    NEq(BinaryArg),
+    Gt(BinaryArg),
+    Lt(BinaryArg),
+    LtE(BinaryArg),
+    GtE(BinaryArg),
+    And(BinaryArg),
+    Or(BinaryArg),
+    Matches(BinaryArg),
+    MatchesNot(BinaryArg),
+    Add(BinaryArg),
+    Subtract(BinaryArg),
+    Multiply(BinaryArg),
+    Divide(BinaryArg),
+    Raise(BinaryArg),
+    Modulo(BinaryArg),
+    Concat(BinaryArg),
 
     // Intrinsic operations
-    LoadUser,
-    LoadBultin,
-    LoadConst,
-    Copy,
-    StoreUser,
-    StoreBuiltin,
-    IntrinsicCall,
-    UserCall,
-    IndirectCall,
-    Jump,
-    Return,
-    Branch,
+    LoadUser(LoadStoreArg),
+    LoadBultin(LoadStoreArg),
+    LoadConst(LoadStoreArg),
+    StoreUser(LoadStoreArg),
+    StoreBuiltin(LoadStoreArg),
+    IntrinsicCall(CallArgs),
+    UserCall(IndCallArgs),
+    IndirectCall(CallArgs),
+    Jump(JumpArg),
+    Return(RetArg),
+    Branch(BranchArg),
 }
 
 const _: () = const { assert!(size_of::<Instruction>() <= 8) };
-
-#[derive(Clone, Copy)]
-#[repr(C, align(8))]
-pub struct Instruction {
-    pub opcode: OpCode,
-    pub args: Arguments,
-}
-
-#[derive(Clone, Copy)]
-#[repr(C, align(2))]
-pub union Arguments {
-    unary_local: UnaryArg,
-    binary_local: BinaryArg,
-    load_store: LoadStoreArg,
-    jump: JumpArg,
-    ret: RetArg,
-    branch: BranchArg,
-    call: CallArgs,
-    ind_call: IndCallArgs,
-}
 
 pub type UnaryArg = (Reg, Reg);
 pub type BinaryArg = (Reg, Reg, Reg);
@@ -107,202 +87,65 @@ pub type CallArgs = (Reg, NonLocal, ArgCount);
 pub type IndCallArgs = (Reg, Reg, ArgCount);
 
 impl Instruction {
-    fn unary(opcode: impl Into<OpCode>, dest: Reg, src: Reg) -> Self {
-        let opcode = opcode.into();
-        debug_assert!(opcode.is_unary());
-        Self {
-            opcode,
-            args: Arguments { unary_local: (dest, src) },
+    fn set_label(&mut self, label: Label) {
+        match self {
+            Self::Jump(lx) | Self::Branch((_, _, lx)) => *lx = label,
+            _ => debug_assert!(false, "Incorrect label set!"),
         }
     }
 
-    fn binary(opcode: impl Into<OpCode>, dest: Reg, lhs: Reg, rhs: Reg) -> Self {
-        let opcode = opcode.into();
-        debug_assert!(opcode.is_binary());
-        Self {
-            opcode,
-            args: Arguments { binary_local: (dest, lhs, rhs) },
-        }
-    }
-
-    fn load_store(opcode: impl Into<OpCode>, dest: Reg, src: NonLocal) -> Self {
-        let opcode = opcode.into();
-        debug_assert!(opcode.is_load_store());
-        Self {
-            opcode,
-            args: Arguments { load_store: (dest, src) },
-        }
-    }
-
-    fn jump(to: Label) -> Self {
-        Self { opcode: OpCode::Jump, args: Arguments { jump: to } }
-    }
-
-    fn branch(cond: Reg, true_to: Label, false_to: Label) -> Self {
-        Self {
-            opcode: OpCode::Branch,
-            args: Arguments { branch: (cond, true_to, false_to) },
-        }
-    }
-
-    pub fn get_unary(&self) -> Option<&UnaryArg> {
-        self.opcode
-            .is_unary()
-            .then_some(unsafe { &self.args.unary_local })
-    }
-
-    pub fn get_binary(&self) -> Option<&BinaryArg> {
-        self.opcode
-            .is_binary()
-            .then_some(unsafe { &self.args.binary_local })
-    }
-
-    pub fn get_load_store(&self) -> Option<&LoadStoreArg> {
-        self.opcode
-            .is_load_store()
-            .then_some(unsafe { &self.args.load_store })
-    }
-
-    pub fn get_branch(&self) -> Option<&BranchArg> {
-        self.opcode
-            .is_branch()
-            .then_some(unsafe { &self.args.branch })
-    }
-
-    pub fn get_jump(&self) -> Option<&JumpArg> {
-        self.opcode.is_jump().then_some(unsafe { &self.args.jump })
-    }
-}
-
-impl OpCode {
-    fn is_unary(self) -> bool {
-        matches!(
-            self,
-            Self::Record | Self::Negation | Self::ToInt | Self::Negative
-        )
-    }
-
-    fn is_binary(self) -> bool {
-        matches!(
-            self,
-            Self::Eq
-                | Self::NEq
-                | Self::Gt
-                | Self::Lt
-                | Self::LtE
-                | Self::GtE
-                | Self::And
-                | Self::Or
-                | Self::Matches
-                | Self::MatchesNot
-                | Self::Add
-                | Self::Subtract
-                | Self::Multiply
-                | Self::Divide
-                | Self::Raise
-                | Self::Modulo
-                | Self::Concat
-        )
-    }
-
-    fn is_load_store(self) -> bool {
-        matches!(
-            self,
-            Self::LoadUser
-                | Self::LoadBultin
-                | Self::LoadConst
-                | Self::StoreUser
-                | Self::StoreBuiltin
-        )
-    }
-
-    fn is_jump(self) -> bool {
-        matches!(self, Self::Jump)
-    }
-
-    fn is_branch(self) -> bool {
-        matches!(self, Self::Branch)
-    }
-}
-
-impl Debug for Instruction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Instruction::{:?}", self.opcode)?;
-        match self.opcode {
-            op if op.is_unary() => {
-                let (dest, data) = unsafe { &self.args.unary_local };
-                write!(f, "({dest:?}, {data:?})")
-            }
-            op if op.is_binary() => {
-                let (dest, lhs, rhs) = unsafe { &self.args.binary_local };
-                write!(f, "({dest:?}, {lhs:?}, {rhs:?})")
-            }
-            op if op.is_load_store() => {
-                let (dest, src) = unsafe { &self.args.load_store };
-                write!(f, "({dest:?}, {src:?})")
-            }
-            OpCode::Branch => {
-                let (cond, label_then, label_else) = unsafe { self.args.branch };
-                write!(f, "({cond:?}, {label_then:?}, {label_else:?})")
-            }
-            OpCode::Jump => {
-                let label = unsafe { self.args.jump };
-                write!(f, "({label:?})")
-            }
-            _ => todo!(),
+    fn push_start_label(&mut self) {
+        if let Self::Branch((_, label, _)) = self {
+            label.0 += 1;
+        } else {
+            debug_assert!(false, "Incorrect label set!");
         }
     }
 }
 
 impl Display for Instruction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.opcode {
-            op @ (OpCode::Record
-            | OpCode::Negation
-            | OpCode::ToInt
-            | OpCode::Negative
-            | OpCode::Copy) => {
-                let (dest, data) = unsafe { &self.args.unary_local };
+        let op = self.display_name();
+        match self {
+            Self::Record((dest, data))
+            | Self::Negation((dest, data))
+            | Self::ToInt((dest, data))
+            | Self::Negative((dest, data))
+            | Self::Copy((dest, data)) => {
                 write!(f, "{dest} <- {op} {data}")
             }
-            op @ (OpCode::Eq
-            | OpCode::NEq
-            | OpCode::Gt
-            | OpCode::Lt
-            | OpCode::LtE
-            | OpCode::GtE
-            | OpCode::And
-            | OpCode::Or
-            | OpCode::Matches
-            | OpCode::MatchesNot
-            | OpCode::Add
-            | OpCode::Subtract
-            | OpCode::Multiply
-            | OpCode::Divide
-            | OpCode::Raise
-            | OpCode::Concat
-            | OpCode::Modulo) => {
-                let (dest, lhs, rhs) = unsafe { &self.args.binary_local };
+            Self::Eq((dest, lhs, rhs))
+            | Self::NEq((dest, lhs, rhs))
+            | Self::Gt((dest, lhs, rhs))
+            | Self::Lt((dest, lhs, rhs))
+            | Self::LtE((dest, lhs, rhs))
+            | Self::GtE((dest, lhs, rhs))
+            | Self::And((dest, lhs, rhs))
+            | Self::Or((dest, lhs, rhs))
+            | Self::Matches((dest, lhs, rhs))
+            | Self::MatchesNot((dest, lhs, rhs))
+            | Self::Add((dest, lhs, rhs))
+            | Self::Subtract((dest, lhs, rhs))
+            | Self::Multiply((dest, lhs, rhs))
+            | Self::Divide((dest, lhs, rhs))
+            | Self::Raise((dest, lhs, rhs))
+            | Self::Concat((dest, lhs, rhs))
+            | Self::Modulo((dest, lhs, rhs)) => {
                 write!(f, "{dest} <- {op} {lhs}, {rhs}")
             }
-            op @ (OpCode::LoadUser | OpCode::StoreUser) => {
-                let (dest, src) = unsafe { &self.args.load_store };
+            Self::LoadUser((dest, src)) | Self::StoreUser((dest, src)) => {
                 write!(f, "{dest} <- {op} user[{src}]")
             }
-            op @ OpCode::LoadConst => {
-                let (dest, src) = unsafe { &self.args.load_store };
+            Self::LoadConst((dest, src)) => {
                 write!(f, "{dest} <- {op} mem[{src}]")
             }
-            op @ (OpCode::StoreBuiltin | OpCode::LoadBultin) => {
-                let (dest, src) = unsafe { &self.args.load_store };
+            Self::StoreBuiltin((dest, src)) | Self::LoadBultin((dest, src)) => {
                 write!(f, "{dest} <- {op} intrinsic[{src}]")
             }
-            op @ OpCode::Branch => {
-                let (cond, label_then, label_else) = unsafe { self.args.branch };
+            Self::Branch((cond, label_then, label_else)) => {
                 write!(f, "{op} {cond}, {label_then}, {label_else}")
             }
-            op @ OpCode::Jump => {
-                let label = unsafe { self.args.jump };
+            Self::Jump(label) => {
                 write!(f, "{op} {label}")
             }
             _ => todo!(),
@@ -310,44 +153,43 @@ impl Display for Instruction {
     }
 }
 
-impl Display for OpCode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let str = match self {
-            Self::Record => "rec",
-            Self::Negation => "not",
-            Self::ToInt => "int",
-            Self::Negative => "neg",
-            Self::Concat => "cat",
-            Self::Eq => "eq",
-            Self::NEq => "neq",
-            Self::Gt => "gt",
-            Self::Lt => "lt",
-            Self::LtE => "le",
-            Self::GtE => "ge",
-            Self::And => "and",
-            Self::Or => "or",
-            Self::Matches => "mtch",
-            Self::MatchesNot => "nmtch",
-            Self::Add => "add",
-            Self::Subtract => "sub",
-            Self::Multiply => "mul",
-            Self::Divide => "div",
-            Self::Raise => "pow",
-            Self::Modulo => "mod",
-            Self::LoadUser => "vload",
-            Self::LoadBultin => "iload",
-            Self::LoadConst => "cload",
-            Self::StoreUser => "vstore",
-            Self::StoreBuiltin => "istore",
-            Self::Copy => "cpy",
-            Self::IntrinsicCall => "icall",
-            Self::UserCall => "ucall",
-            Self::IndirectCall => "vcall",
-            Self::Jump => "jmp",
-            Self::Return => "ret",
-            Self::Branch => "brif",
-        };
-        <_ as Display>::fmt(str, f)
+impl Instruction {
+    fn display_name(self) -> &'static str {
+        match self {
+            Self::Record(_) => "rec",
+            Self::Negation(_) => "not",
+            Self::ToInt(_) => "int",
+            Self::Negative(_) => "neg",
+            Self::Concat(_) => "cat",
+            Self::Eq(_) => "eq",
+            Self::NEq(_) => "neq",
+            Self::Gt(_) => "gt",
+            Self::Lt(_) => "lt",
+            Self::LtE(_) => "le",
+            Self::GtE(_) => "ge",
+            Self::And(_) => "and",
+            Self::Or(_) => "or",
+            Self::Matches(_) => "mtch",
+            Self::MatchesNot(_) => "nmtch",
+            Self::Add(_) => "add",
+            Self::Subtract(_) => "sub",
+            Self::Multiply(_) => "mul",
+            Self::Divide(_) => "div",
+            Self::Raise(_) => "pow",
+            Self::Modulo(_) => "mod",
+            Self::LoadUser(_) => "vload",
+            Self::LoadBultin(_) => "iload",
+            Self::LoadConst(_) => "cload",
+            Self::StoreUser(_) => "vstore",
+            Self::StoreBuiltin(_) => "istore",
+            Self::Copy(_) => "cpy",
+            Self::IntrinsicCall(_) => "icall",
+            Self::UserCall(_) => "ucall",
+            Self::IndirectCall(_) => "vcall",
+            Self::Jump(_) => "jmp",
+            Self::Return(_) => "ret",
+            Self::Branch(_) => "brif",
+        }
     }
 }
 
