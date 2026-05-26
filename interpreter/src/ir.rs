@@ -201,7 +201,7 @@ impl OpCode {
     fn is_unary(self) -> bool {
         matches!(
             self,
-            Self::Record | Self::Negation | Self::ToInt | Self::Negative | Self::Concat
+            Self::Record | Self::Negation | Self::ToInt | Self::Negative
         )
     }
 

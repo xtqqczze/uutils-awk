@@ -108,26 +108,34 @@ impl Interpreter<'_> {
     pub fn run(&mut self) {
         while let Some(instr) = self.bc.code.get(self.program_counter) {
             match instr {
-                // ix if let Some(&(dest, src)) = ix.get_unary() => {}
+                ix if let Some(&(dest, src)) = ix.get_unary() => {
+                    let src = self.registers.get(src);
+                    let val = match ix.opcode {
+                        OpCode::Record => todo!(),
+                        OpCode::Negation => Value::Float(!src.to_bool() as usize as f64),
+                        OpCode::ToInt => Value::Float(src.to_num()),
+                        OpCode::Negative => Value::Float(-src.to_num()),
+                        _ => unreachable!(),
+                    };
+                    self.registers.write(dest, val);
+                }
                 ix if let Some(&(dest, lhs, rhs)) = ix.get_binary() => {
-                    let val = {
-                        let lhs = self.registers.get(lhs);
-                        let rhs = self.registers.get(rhs);
-                        match ix.opcode {
-                            OpCode::Add => lhs + rhs,
-                            OpCode::Subtract => lhs - rhs,
-                            OpCode::Multiply => lhs * rhs,
-                            OpCode::Divide => lhs / rhs,
-                            OpCode::Concat => {
-                                let mut buf = StdVec::with_capacity(
-                                    lhs.string_size_hint() + rhs.string_size_hint(),
-                                );
-                                lhs.write_string(&mut buf);
-                                rhs.write_string(&mut buf);
-                                Value::String(buf.into())
-                            }
-                            _ => todo!(),
+                    let lhs = self.registers.get(lhs);
+                    let rhs = self.registers.get(rhs);
+                    let val = match ix.opcode {
+                        OpCode::Add => lhs + rhs,
+                        OpCode::Subtract => lhs - rhs,
+                        OpCode::Multiply => lhs * rhs,
+                        OpCode::Divide => lhs / rhs,
+                        OpCode::Concat => {
+                            let mut buf = StdVec::with_capacity(
+                                lhs.string_size_hint() + rhs.string_size_hint(),
+                            );
+                            lhs.write_string(&mut buf);
+                            rhs.write_string(&mut buf);
+                            Value::String(buf.into())
                         }
+                        _ => todo!(),
                     };
                     self.registers.write(dest, val);
                 }

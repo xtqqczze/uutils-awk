@@ -53,7 +53,7 @@ impl Value<'_> {
         }
     }
 
-    fn to_num(&self) -> f64 {
+    pub fn to_num(&self) -> f64 {
         match self {
             &Self::Float(f) => f,
             &Self::Bool(b) => b as usize as f64,
@@ -79,7 +79,7 @@ impl Value<'_> {
     pub fn string_size_hint(&self) -> usize {
         match self {
             Self::String(s) | Self::Regex(s) => s.len(),
-            Self::Float(_) => 2,
+            Self::Float(_) => 8,
             Self::Bool(_) => 1,
             _ => 0,
         }
