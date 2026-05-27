@@ -148,7 +148,15 @@ impl Display for Instruction {
             Self::Jump(label) => {
                 write!(f, "{op} {label}")
             }
-            _ => todo!(),
+            Self::Return(src) => {
+                write!(f, "{op} {src}")
+            }
+            Self::IntrinsicCall((dest, code, args)) | Self::IndirectCall((dest, code, args)) => {
+                write!(f, "{dest} <- {op} {code}, {args}")
+            }
+            Self::UserCall((dest, src, args)) => {
+                write!(f, "{dest} <- {op} {src}, {args}")
+            }
         }
     }
 }
@@ -207,6 +215,12 @@ impl Display for Reg {
 
 impl Display for NonLocal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        <_ as Display>::fmt(&self.0, f)
+    }
+}
+
+impl Display for ArgCount {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        <_ as Display>::fmt(&self.0, f)
     }
 }
