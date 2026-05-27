@@ -8,7 +8,7 @@ use std::{borrow::Cow, mem::forget, ops::Deref};
 use bumpalo::{Bump, collections::Vec};
 use parser::{
     Atom, BinaryOperator, BinaryPlaceOperator, Body, Expr, ExprNode, Place, SimpleStatement,
-    Statement, UnaryOperator, Variable,
+    Statement, UnaryOperator, UnaryPlaceOperator, Variable,
 };
 
 use crate::{
@@ -224,6 +224,39 @@ impl<'a> Code<'a> {
                     self.store_place(place, dest);
 
                     self.free_reg(lhs);
+                }
+                ExprNode::UnaryPlaceOperation(op, place) => {
+                    let rhs = self.alloc_reg();
+                    let one = self.register_const(Value::Float(1.));
+                    self.bc.emit(Instruction::LoadConst((*rhs, one)));
+                    self.load_place(dest, place);
+
+                    let second_op = match op {
+                        UnaryPlaceOperator::IncrementL | UnaryPlaceOperator::IncrementR => {
+                            Instruction::Add
+                        }
+                        UnaryPlaceOperator::DecrementL | UnaryPlaceOperator::DecrementR => {
+                            Instruction::Subtract
+                        }
+                    };
+                    match op {
+                        UnaryPlaceOperator::IncrementL | UnaryPlaceOperator::DecrementL => {
+                            self.bc.emit(second_op((dest, dest, *rhs)));
+                            self.store_place(place, dest);
+                        }
+                        UnaryPlaceOperator::IncrementR | UnaryPlaceOperator::DecrementR => {
+                            // force dest to concrete num:
+                            let tmp = self.alloc_reg();
+                            let zero = self.register_const(Value::Float(0.));
+                            self.bc.emit(Instruction::LoadConst((*tmp, zero)));
+                            self.bc.emit(Instruction::Add((dest, dest, *tmp)));
+
+                            self.bc.emit(second_op((*tmp, dest, *rhs)));
+                            self.store_place(place, *tmp);
+                            self.free_reg(tmp);
+                        }
+                    }
+                    self.free_reg(rhs);
                 }
                 _ => todo!(),
             },
