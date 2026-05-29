@@ -35,6 +35,7 @@ pub struct Rule<'a> {
 pub enum Atom<'a> {
     Variable(Variable<'a>),
     String(Slice<'a>),
+    SmallInt(i8),
     Number(f64),
     BigInt(),
     BigFloat(),

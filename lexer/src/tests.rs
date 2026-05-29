@@ -121,20 +121,25 @@ fn lexer_test_gnu_pattern() {
 }
 
 #[test]
-fn lexer_test_floats() {
+fn lexer_test_nums() {
     let arena = Bump::new();
-    let str = b"1 20. 0. .3 2e4 -3.e2 5e+1 2.1e-3";
+    let str = b"1 20. 0. .3 2e4 -3.e2 5e+1 2.1e-3 -129 -128 -0 127 128";
     assert_eq!(
         &lex(str, &arena, false, false),
         &[
-            Token::Number(1.),
+            Token::SmallInt(1),
             Token::Number(20.),
             Token::Number(0.),
             Token::Number(0.3),
             Token::Number(2e4),
             Token::Number(-3e2),
             Token::Number(5e1),
-            Token::Number(2.1e-3)
+            Token::Number(2.1e-3),
+            Token::Number(-129.),
+            Token::SmallInt(-128),
+            Token::SmallInt(0),
+            Token::SmallInt(127),
+            Token::Number(128.)
         ]
     );
 }
@@ -160,12 +165,12 @@ fn lexer_test_ident_rules_non_posix() {
     assert_eq!(
         &lex(b"1a::a a::1a _a", &arena, false, false),
         &[
-            Token::Number(1.),
+            Token::SmallInt(1),
             Token::Identifier(Identifier { namespace: Some("a"), literal: "a" }),
             Token::Identifier(Identifier { namespace: None, literal: "a" }),
             Token::Colon,
             Token::Colon,
-            Token::Number(1.),
+            Token::SmallInt(1),
             Token::Identifier(Identifier { namespace: None, literal: "a" }),
             Token::Identifier(Identifier { namespace: None, literal: "_a" })
         ]
@@ -200,7 +205,7 @@ fn lexer_test_general_tokens() {
             Token::Print,
             Token::Identifier(Identifier { namespace: None, literal: "a" }),
             Token::Plus,
-            Token::Number(1.),
+            Token::SmallInt(1),
             Token::ClosedBrace,
             Token::Newline,
             Token::Regex(b"2\\..*".into()),
@@ -209,7 +214,7 @@ fn lexer_test_general_tokens() {
             Token::EndPattern,
             Token::OpenBrace,
             Token::Record,
-            Token::Number(1.),
+            Token::SmallInt(1),
             Token::EqualTo,
             Token::Identifier(Identifier { namespace: Some("foo"), literal: "bar" }),
             Token::ClosedBrace,
@@ -222,14 +227,14 @@ fn lexer_test_general_tokens() {
 fn lexer_test_regex_ambiguity() {
     let arena = Bump::new();
     assert_eq!(
-        &lex(b"1/=1 a/=1", &arena, false, false),
+        &lex(b"1/=1. a/=1", &arena, false, false),
         &[
-            Token::Number(1.),
+            Token::SmallInt(1),
             Token::SlashAssign,
             Token::Number(1.),
             Token::Identifier(Identifier { namespace: None, literal: "a" }),
             Token::SlashAssign,
-            Token::Number(1.)
+            Token::SmallInt(1)
         ]
     );
 }

@@ -34,7 +34,9 @@ pub type Result<T, E = LexingError> = std::result::Result<T, E>;
 #[logos(subpattern ignore_with_nl = r"(?:(?&ignore)|\n)*")]
 #[logos(error(LexingError, callback = |lex| LexingError::unexpected(lex)))]
 pub enum Token<'a> {
-    #[regex(r"(-)?[0-9]+(\.[0-9]*)?([eE][+-]?[0-9]+)?", parse_float)]
+    #[regex("(-128|(-)?(12[0-7]|1[01][0-9]|[1-9]?[0-9]))", parse_i8, priority = 9)]
+    SmallInt(i8),
+    #[regex(r"(-)?[0-9]+(\.[0-9]*)?([eE][+-]?[0-9]+)?", parse_float, priority = 8)]
     #[regex(r"\.[0-9]+([eE][+-]?[0-9]+)?", parse_float)]
     Number(f64),
     #[token("\"", parse_string)]
@@ -480,6 +482,11 @@ fn parse_ident<'a>(lex: &mut Lexer<'a>, index: impl SliceIndex<[u8], Output = [u
 
 fn parse_float(lex: &mut Lexer<'_>) -> f64 {
     parse_ident(lex, ..).parse().unwrap_or(0.)
+}
+
+fn parse_i8(lex: &mut Lexer<'_>) -> i8 {
+    // SAFETY: The regex matchin ensures it is well-formed and in [-128, 127].
+    unsafe { parse_ident(lex, ..).parse().unwrap_unchecked() }
 }
 
 fn parse_non_posix_keyword<'a>(lex: &mut Lexer<'a>, other: Token<'a>) -> Token<'a> {
