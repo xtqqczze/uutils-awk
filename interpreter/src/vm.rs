@@ -61,11 +61,12 @@ pub struct Consts<'a>(pub IndexSet<Value<'a>, RandomState, &'a Bump>);
 
 impl<'a> Interpreter<'a> {
     pub fn new(compat: ExecMode, code: Code<'a>) -> Self {
+        let n_regs = code.reg_pointer.max(1) as usize;
         Self {
             arena: code.arena,
             bc: code.bc,
             program_counter: 0,
-            registers: Registers(bumpalo::vec![in code.arena; Value::Untyped; 8]),
+            registers: Registers(bumpalo::vec![in code.arena; Value::Untyped; n_regs]),
             symbols: code.symbols,
             consts: code.consts,
             compat,
