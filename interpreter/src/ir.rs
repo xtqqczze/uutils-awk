@@ -77,7 +77,7 @@ pub enum Instruction {
     StoreRecord(BinaryArg),
     IntrinsicCall(CallArgs),
     OutputCall(OutputCallArgs),
-    UserCall(IndCallArgs),
+    UserCall(CallArgs),
     IndirectCall(CallArgs),
     Jump(JumpArg),
     Return(RetArg),
@@ -94,9 +94,9 @@ pub type MemArg = (Reg, NonLocal);
 pub type JumpArg = Label;
 pub type RetArg = MaybeImm;
 pub type BranchArg = (MaybeImm, Label, Label);
-pub type CallArgs = (Reg, Reg, NonLocal);
+pub type CallArgs = (Reg, Reg, Reg, NonLocal);
 pub type OutputCallArgs = (Reg, Reg, Command, Option<Redirection>);
-pub type IndCallArgs = (Reg, Reg, Reg);
+pub type IndCallArgs = (Reg, Reg, Reg, Reg);
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug)]
@@ -195,8 +195,9 @@ impl Display for Instruction {
             Self::Return(src) => {
                 write!(f, "{op} {src}")
             }
-            Self::IntrinsicCall((dest, code, args)) | Self::IndirectCall((dest, code, args)) => {
-                write!(f, "{dest} <- {op} {code}, {args}")
+            Self::IntrinsicCall((dest, start, end, fun))
+            | Self::IndirectCall((dest, start, end, fun)) => {
+                write!(f, "{dest} <- {op} {fun}, {start}..{end}")
             }
             Self::OutputCall((start, end, call, Some(redir))) => {
                 write!(f, "{call}{redir:?} {start}..{end}")
@@ -204,8 +205,8 @@ impl Display for Instruction {
             Self::OutputCall((start, end, call, None)) => {
                 write!(f, "{call} {start}..{end}")
             }
-            Self::UserCall((dest, src, args)) => {
-                write!(f, "{dest} <- {op} {src}, {args}")
+            Self::UserCall((dest, start, end, fun)) => {
+                write!(f, "{dest} <- {op} {fun}, {start}..{end}")
             }
         }
     }

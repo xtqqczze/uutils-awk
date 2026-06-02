@@ -213,12 +213,12 @@ impl Interpreter<'_> {
                 Instruction::StoreRecord(_) => todo!(),
                 Instruction::StoreBuiltinScalar((_dest, _imm, _src)) => todo!(),
                 Instruction::StoreBuiltinArray((_dest, _src, _start, _end)) => todo!(),
-                Instruction::IntrinsicCall((_dest, _code, _args)) => todo!(),
+                Instruction::IntrinsicCall((_dest, _start, _end, _fun)) => todo!(),
                 Instruction::OutputCall((start, end, fun, redir)) => {
                     self.intrinsic_print(start, end, fun, redir);
                 }
-                Instruction::UserCall((_dest, _code, _args)) => todo!(),
-                Instruction::IndirectCall((_dest, _code, _args)) => todo!(),
+                Instruction::UserCall((_dest, _start, _end, _fun)) => todo!(),
+                Instruction::IndirectCall((_dest, _start, _end, _fun)) => todo!(),
                 Instruction::Jump(Label(label)) => {
                     self.program_counter = label as _;
                     continue;
