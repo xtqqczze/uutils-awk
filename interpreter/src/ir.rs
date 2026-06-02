@@ -23,7 +23,7 @@ pub struct NonLocal(pub u16);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)]
-pub struct Reg(pub u16);
+pub struct Reg(pub u8);
 
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
@@ -63,15 +63,18 @@ pub enum Instruction {
     Concat(BinaryArg),
 
     // Intrinsic operations
-    LoadUserScalar(MemScalarArg),
-    LoadUserArray(MemArrayArg),
-    LoadBuiltinScalar(MemScalarArg),
-    LoadBuiltinArray(MemArrayArg),
-    LoadConst(MemScalarArg),
-    StoreUserScalar(MemScalarArg),
-    StoreBuiltinScalar(MemScalarArg),
-    StoreUserArray(MemArrayArg),
-    StoreBuiltinArray(MemArrayArg),
+    LoadUserScalar(MemArg),
+    LoadUserArray(MemArgRange),
+    LoadUserMDimArray(MemArgRange),
+    LoadBuiltinScalar(MemArg),
+    LoadBuiltinArray(MemArgRange),
+    LoadConst(MemArg),
+    StoreUserScalar(MemArgImm),
+    StoreBuiltinScalar(MemArgImm),
+    StoreUserArray(MemArgRange),
+    StoreUserMDimArray(MemArgRange),
+    StoreBuiltinArray(MemArgRange),
+    StoreRecord(BinaryArg),
     IntrinsicCall(CallArgs),
     OutputCall(OutputCallArgs),
     UserCall(IndCallArgs),
@@ -83,16 +86,28 @@ pub enum Instruction {
 
 const _: () = const { assert!(size_of::<Instruction>() <= 8) };
 
-pub type UnaryArg = (Reg, Reg);
-pub type BinaryArg = (Reg, Reg, Reg);
-pub type MemScalarArg = (Reg, NonLocal);
-pub type MemArrayArg = (Reg, Reg, NonLocal);
+pub type UnaryArg = (Reg, MaybeImm);
+pub type BinaryArg = (Reg, MaybeImm, MaybeImm);
+pub type MemArgImm = (Reg, MaybeImm, NonLocal);
+pub type MemArgRange = (Reg, Reg, Reg, NonLocal);
+pub type MemArg = (Reg, NonLocal);
 pub type JumpArg = Label;
-pub type RetArg = Reg;
-pub type BranchArg = (Reg, Label, Label);
+pub type RetArg = MaybeImm;
+pub type BranchArg = (MaybeImm, Label, Label);
 pub type CallArgs = (Reg, Reg, NonLocal);
 pub type OutputCallArgs = (Reg, Reg, Command, Option<Redirection>);
 pub type IndCallArgs = (Reg, Reg, Reg);
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug)]
+pub enum MaybeImm {
+    Reg(Reg),
+    Rec(i8),
+    Imm(i8),
+    ImmCnt(u8),
+    ImmUserVar(u8),
+    ImmBuiltinVar(u8),
+}
 
 impl Instruction {
     fn set_label(&mut self, label: Label) {
@@ -141,21 +156,35 @@ impl Display for Instruction {
             | Self::Modulo((dest, lhs, rhs)) => {
                 write!(f, "{dest} <- {op} {lhs}, {rhs}")
             }
-            Self::LoadUserScalar((dest, src)) | Self::StoreUserScalar((dest, src)) => {
+            Self::LoadUserScalar((dest, src)) => {
                 write!(f, "{dest} <- {op} user[{src}]")
             }
-            Self::LoadUserArray((dest, src, place)) | Self::StoreUserArray((dest, src, place)) => {
-                write!(f, "{dest} <- {op} user[{place}[{src}]]")
+            Self::StoreUserScalar((dest, imm, src)) => {
+                write!(f, "{dest} <- {op} user[{src}], {imm}")
+            }
+            Self::LoadUserArray((dest, start, end, src))
+            | Self::StoreUserArray((dest, start, end, src)) => {
+                write!(f, "{dest} <- {op} user[{start}..{end}], {src}")
+            }
+            Self::LoadUserMDimArray((dest, start, end, src))
+            | Self::StoreUserMDimArray((dest, start, end, src)) => {
+                write!(f, "{dest} <- {op} user[{src}], {start}..{end}")
             }
             Self::LoadConst((dest, src)) => {
                 write!(f, "{dest} <- {op} mem[{src}]")
             }
-            Self::StoreBuiltinScalar((dest, src)) | Self::LoadBuiltinScalar((dest, src)) => {
+            Self::StoreBuiltinScalar((dest, imm, src)) => {
+                write!(f, "{dest} <- {op} intrinsic[{src}], {imm}")
+            }
+            Self::LoadBuiltinScalar((dest, src)) => {
                 write!(f, "{dest} <- {op} intrinsic[{src}]")
             }
-            Self::LoadBuiltinArray((dest, src, place))
-            | Self::StoreBuiltinArray((dest, src, place)) => {
-                write!(f, "{dest} <- {op} intrinsic[{place}[{src}]]")
+            Self::StoreRecord((dest, src, imm)) => {
+                write!(f, "{dest} <- {op} {src}, {imm}")
+            }
+            Self::LoadBuiltinArray((dest, start, end, src))
+            | Self::StoreBuiltinArray((dest, start, end, src)) => {
+                write!(f, "{dest} <- {op} intrinsic[{src}], {start}..{end}")
             }
             Self::Branch((cond, label_then, label_else)) => {
                 write!(f, "{op} {cond}, {label_then}, {label_else}")
@@ -170,10 +199,10 @@ impl Display for Instruction {
                 write!(f, "{dest} <- {op} {code}, {args}")
             }
             Self::OutputCall((start, end, call, Some(redir))) => {
-                write!(f, "{call}{redir:?} {start}, {end}")
+                write!(f, "{call}{redir:?} {start}..{end}")
             }
             Self::OutputCall((start, end, call, None)) => {
-                write!(f, "{call} {start}, {end}")
+                write!(f, "{call} {start}..{end}")
             }
             Self::UserCall((dest, src, args)) => {
                 write!(f, "{dest} <- {op} {src}, {args}")
@@ -209,11 +238,14 @@ impl Instruction {
             Self::LoadUserScalar(_) => "vsload",
             Self::LoadBuiltinScalar(_) => "isload",
             Self::LoadUserArray(_) => "vaload",
+            Self::LoadUserMDimArray(_) => "vvload",
             Self::LoadBuiltinArray(_) => "iaload",
             Self::LoadConst(_) => "cload",
             Self::StoreUserScalar(_) => "vsstore",
+            Self::StoreRecord(_) => "rsstore",
             Self::StoreBuiltinScalar(_) => "isstore",
             Self::StoreUserArray(_) => "vastore",
+            Self::StoreUserMDimArray(_) => "vvstore",
             Self::StoreBuiltinArray(_) => "iastore",
             Self::Copy(_) => "cpy",
             Self::IntrinsicCall(_) => "icall",
@@ -248,5 +280,18 @@ impl Display for NonLocal {
 impl Display for ArgCount {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         <_ as Display>::fmt(&self.0, f)
+    }
+}
+
+impl Display for MaybeImm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Reg(reg) => <_ as Display>::fmt(reg, f),
+            Self::Rec(rec) => write!(f, "rec[{rec}]"),
+            Self::Imm(imm) => write!(f, "imm({imm})"),
+            Self::ImmCnt(imm) => write!(f, "mem[{imm}]"),
+            Self::ImmUserVar(imm) => write!(f, "user[{imm}]"),
+            Self::ImmBuiltinVar(imm) => write!(f, "intrinsic[{imm}]"),
+        }
     }
 }

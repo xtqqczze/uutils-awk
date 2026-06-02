@@ -12,7 +12,7 @@ use parser::{
 };
 
 use crate::{
-    ir::{BinaryArg, Instruction, Label, NonLocal, Reg, UnaryArg},
+    ir::{BinaryArg, Instruction, Label, MaybeImm, NonLocal, Reg, UnaryArg},
     types::Value,
     vm::{Consts, ExecMode, Interpreter, SymbolTable},
 };
@@ -24,13 +24,20 @@ pub struct Code<'arena> {
     pub consts: Consts<'arena>,
     pub symbols: SymbolTable<'arena>,
     free_regs: Vec<'arena, Reg>,
-    pub reg_pointer: u16,
+    pub reg_pointer: u8,
 }
 
 #[must_use]
 #[derive(Debug)]
 #[repr(transparent)]
 struct LinearReg(Reg);
+
+#[must_use]
+#[derive(Debug)]
+enum Operand {
+    Imm(MaybeImm),
+    Reg(LinearReg),
+}
 
 impl<'a> Code<'a> {
     fn lower_body(&mut self, body: &Body) {
@@ -45,16 +52,19 @@ impl<'a> Code<'a> {
                 let mut state = RegsState::new(self);
                 let condition = self.lower_expr(condition);
                 let label_then = self.following_instr(1);
-                let if_label =
-                    self.bc
-                        .emit(Instruction::Branch((*condition, label_then, Label(0))));
-                self.free_reg(condition);
+                let if_label = self.bc.emit(Instruction::Branch((
+                    condition.to_mi(),
+                    label_then,
+                    Label(0),
+                )));
+                condition.free(self);
                 self.lower_body(then_body);
                 let next = self.following_instr(0);
                 self.bc.nth(if_label).set_label(next);
 
                 if let Some(else_body) = else_body {
-                    state.reg_pointer += 1;
+                    state.reg_pointer =
+                        state.reg_pointer.checked_add(1).expect("register overflow");
                     self.bc.nth(if_label).push_start_label();
                     let end_label = self.bc.emit(Instruction::Jump(Label(0)));
                     state.scope_hwm(self, |c| c.lower_body(else_body));
@@ -66,11 +76,11 @@ impl<'a> Code<'a> {
                 let cond_label = self.following_instr(0);
                 let condition = self.lower_expr(condition);
                 let while_label = self.bc.emit(Instruction::Branch((
-                    *condition,
+                    condition.to_mi(),
                     self.following_instr(1),
                     Label(0),
                 )));
-                self.free_reg(condition);
+                condition.free(self);
                 self.lower_body(then_body);
                 self.bc.emit(Instruction::Jump(cond_label));
                 let next = self.following_instr(0);
@@ -81,29 +91,31 @@ impl<'a> Code<'a> {
                 self.lower_body(then_body);
                 let condition = self.lower_expr(condition);
                 self.bc.emit(Instruction::Branch((
-                    *condition,
+                    condition.to_mi(),
                     do_label,
                     self.following_instr(1),
                 )));
-                self.free_reg(condition);
+                condition.free(self);
             }
             Statement::For { init, condition, update, body } => {
                 if let Some(SimpleStatement::Expression(expr)) = init {
-                    let reg = self.lower_expr(expr);
-                    self.free_reg(reg);
+                    let value = self.lower_expr(expr);
+                    value.free(self);
                 }
                 let cond_label = self.following_instr(0);
                 if let Some(condition) = condition {
                     let condition = self.lower_expr(condition);
                     let body_label = self.following_instr(1);
-                    let while_label =
-                        self.bc
-                            .emit(Instruction::Branch((*condition, body_label, Label(0))));
-                    self.free_reg(condition);
+                    let while_label = self.bc.emit(Instruction::Branch((
+                        condition.to_mi(),
+                        body_label,
+                        Label(0),
+                    )));
+                    condition.free(self);
                     self.lower_body(body);
                     if let Some(SimpleStatement::Expression(expr)) = update {
-                        let reg = self.lower_expr(expr);
-                        self.free_reg(reg);
+                        let value = self.lower_expr(expr);
+                        value.free(self);
                     }
                     self.bc.emit(Instruction::Jump(cond_label));
                     let next = self.following_instr(0);
@@ -111,15 +123,15 @@ impl<'a> Code<'a> {
                 } else {
                     self.lower_body(body);
                     if let Some(SimpleStatement::Expression(expr)) = update {
-                        let reg = self.lower_expr(expr);
-                        self.free_reg(reg);
+                        let value = self.lower_expr(expr);
+                        value.free(self);
                     }
                     self.bc.emit(Instruction::Jump(cond_label));
                 }
             }
             Statement::Simple(SimpleStatement::Expression(expr)) => {
-                let reg = self.lower_expr(expr);
-                self.free_reg(reg);
+                let value = self.lower_expr(expr);
+                value.free(self);
             }
             Statement::Simple(SimpleStatement::Command { name, args, redirection }) => {
                 let (call_start, call_end, redir) = self.gen_call_convention(args, |this| {
@@ -138,68 +150,97 @@ impl<'a> Code<'a> {
         }
     }
 
-    fn lower_expr(&mut self, expr: &Expr) -> LinearReg {
+    fn lower_expr(&mut self, expr: &Expr) -> Operand {
+        match expr {
+            Expr::Leaf(atom) => self.lower_atom(atom),
+            Expr::Node(_) => {
+                let dest = self.alloc_reg();
+                self.lower_expr_into(expr, *dest);
+                Operand::Reg(dest)
+            }
+        }
+    }
+
+    fn lower_atom(&mut self, atom: &Atom) -> Operand {
         let dest = self.alloc_reg();
-        self.lower_expr_into(expr, *dest);
-        dest
+        match self.lower_atom_mi(atom, *dest) {
+            MaybeImm::Reg(reg) => {
+                debug_assert_eq!(reg, *dest);
+                Operand::Reg(dest)
+            }
+            imm => {
+                self.free_reg(dest);
+                Operand::Imm(imm)
+            }
+        }
+    }
+
+    fn lower_atom_mi(&mut self, atom: &Atom, dest: Reg) -> MaybeImm {
+        match atom {
+            Atom::Variable(Variable::User(ident)) => {
+                let src = self.symbols.register_user_var(ident, self.arena);
+                MaybeImm::from_vs(self, dest, src)
+            }
+            Atom::Variable(var) => MaybeImm::from_is(self, dest, var),
+            Atom::SmallInt(n) => MaybeImm::Imm(*n),
+            Atom::Number(n) => MaybeImm::from_cnt(self, dest, Value::Float(*n)),
+            atom @ (Atom::String(s) | Atom::TypedRegex(s)) => {
+                let val = if matches!(atom, Atom::String(_)) {
+                    Value::String
+                } else {
+                    Value::Regex
+                };
+                let buf = self.arena.alloc_slice_copy(s.as_ref());
+                MaybeImm::from_cnt(self, dest, val(Cow::Borrowed(buf)))
+            }
+            Atom::Regex(r) => {
+                let buf = &*self.arena.alloc_slice_copy(r.as_ref());
+                let rhs = MaybeImm::from_cnt(self, dest, Value::Regex(buf.into()));
+                self.bc
+                    .emit(Instruction::Matches((dest, MaybeImm::Rec(0), rhs)));
+                MaybeImm::Reg(dest)
+            }
+            _ => todo!(),
+        }
+    }
+
+    fn lower_atom_into(&mut self, atom: &Atom, dest: Reg) {
+        let mi = self.lower_atom_mi(atom, dest);
+        match mi {
+            MaybeImm::Reg(reg) if reg == dest => {}
+            other => {
+                self.bc.emit(Instruction::Copy((dest, other)));
+            }
+        }
     }
 
     fn lower_expr_into(&mut self, expr: &Expr, dest: Reg) {
         match expr {
-            Expr::Leaf(atom) => match atom {
-                Atom::Variable(Variable::User(ident)) => {
-                    let src = self.symbols.register_user_var(ident, self.arena);
-                    self.bc.emit(Instruction::LoadUserScalar((dest, src)));
-                }
-                &Atom::Number(n) => {
-                    let src = self.register_const(Value::Float(n));
-                    self.bc.emit(Instruction::LoadConst((dest, src)));
-                }
-                atom @ (Atom::String(s) | Atom::TypedRegex(s)) => {
-                    let val = if matches!(atom, Atom::String(_)) {
-                        Value::String
-                    } else {
-                        Value::Regex
-                    };
-                    let src = self.register_const(val(Cow::Borrowed(
-                        self.arena.alloc_slice_copy(s.as_ref()),
-                    )));
-                    self.bc.emit(Instruction::LoadConst((dest, src)));
-                }
-                Atom::Regex(r) => {
-                    let src = self.register_const(Value::Regex(Cow::Borrowed(
-                        self.arena.alloc_slice_copy(r.as_ref()),
-                    )));
-                    self.bc.emit(Instruction::LoadConst((dest, src)));
-                    let rec = self.lower_expr(&Expr::Leaf(Atom::Number(0.)));
-                    self.bc.emit(Instruction::Matches((dest, *rec, dest)));
-                    self.free_reg(rec);
-                }
-                _ => todo!(),
-            },
+            Expr::Leaf(atom) => self.lower_atom_into(atom, dest),
             Expr::Node(node) => match node.as_ref() {
                 ExprNode::UnaryOperation(op, expr) => {
                     let src = self.lower_expr(expr);
-                    self.bc.emit(Instruction::from((*op, (dest, *src))));
-                    self.free_reg(src);
+                    self.bc.emit(Instruction::from((*op, (dest, src.to_mi()))));
+                    src.free(self);
                 }
                 ExprNode::BinaryOperation(op, lhs, rhs) => {
                     let lhs = self.lower_expr(lhs);
                     let rhs = self.lower_expr(rhs);
-                    self.bc.emit(Instruction::from((*op, (dest, *lhs, *rhs))));
-                    self.free_reg(lhs);
-                    self.free_reg(rhs);
+                    self.bc
+                        .emit(Instruction::from((*op, (dest, lhs.to_mi(), rhs.to_mi()))));
+                    lhs.free(self);
+                    rhs.free(self);
                 }
                 ExprNode::Ternary(cond, true_then, false_then) => {
-                    self.lower_expr_into(cond, dest);
-
-                    let mut state = RegsState::new(self);
+                    let cond = self.lower_expr(cond);
                     let branch = self.bc.emit(Instruction::Branch((
-                        dest,
+                        cond.to_mi(),
                         self.following_instr(1),
                         Label(0),
                     )));
+                    cond.free(self);
 
+                    let mut state = RegsState::new(self);
                     state = state
                         .scope(self, |c| {
                             c.lower_expr_into(true_then, dest);
@@ -218,11 +259,12 @@ impl<'a> Code<'a> {
                     self.bc.nth(jump).set_label(next);
                 }
                 ExprNode::BinaryPlaceOperation(op, place, expr) => {
-                    self.lower_expr_into(expr, dest);
+                    let val = self.lower_expr(expr);
 
                     let second_op = match op {
                         BinaryPlaceOperator::Assignment => {
-                            self.store_place(place, dest);
+                            self.store_place(place, dest, val.to_mi());
+                            val.free(self);
                             return;
                         }
                         BinaryPlaceOperator::AddAssign => Instruction::Add,
@@ -232,19 +274,18 @@ impl<'a> Code<'a> {
                         BinaryPlaceOperator::PowAssign => Instruction::Raise,
                         BinaryPlaceOperator::ModAssign => Instruction::Modulo,
                     };
-                    let lhs = self.alloc_reg();
+                    let lhs_reg = self.alloc_reg();
+                    let lhs = self.load_place(*lhs_reg, place);
 
-                    self.load_place(*lhs, place);
-                    self.bc.emit(second_op((dest, *lhs, dest)));
-                    self.store_place(place, dest);
+                    self.bc.emit(second_op((dest, lhs, val.to_mi())));
+                    self.store_place(place, dest, dest.into());
 
-                    self.free_reg(lhs);
+                    self.free_reg(lhs_reg);
+                    val.free(self);
                 }
                 ExprNode::UnaryPlaceOperation(op, place) => {
-                    let rhs = self.alloc_reg();
-                    let one = self.register_const(Value::Float(1.));
-                    self.bc.emit(Instruction::LoadConst((*rhs, one)));
-                    self.load_place(dest, place);
+                    // Note: val may alias with dest.
+                    let val = self.load_place(dest, place);
 
                     let second_op = match op {
                         UnaryPlaceOperator::IncrementL | UnaryPlaceOperator::IncrementR => {
@@ -256,101 +297,97 @@ impl<'a> Code<'a> {
                     };
                     match op {
                         UnaryPlaceOperator::IncrementL | UnaryPlaceOperator::DecrementL => {
-                            self.bc.emit(second_op((dest, dest, *rhs)));
-                            self.store_place(place, dest);
+                            self.bc.emit(second_op((dest, val, MaybeImm::Imm(1))));
+                            self.store_place(place, dest, dest.into());
                         }
                         UnaryPlaceOperator::IncrementR | UnaryPlaceOperator::DecrementR => {
-                            // force dest to concrete num:
+                            self.bc
+                                .emit(Instruction::Add((dest, val, MaybeImm::Imm(0))));
                             let tmp = self.alloc_reg();
-                            let zero = self.register_const(Value::Float(0.));
-                            self.bc.emit(Instruction::LoadConst((*tmp, zero)));
-                            self.bc.emit(Instruction::Add((dest, dest, *tmp)));
-
-                            self.bc.emit(second_op((*tmp, dest, *rhs)));
-                            self.store_place(place, *tmp);
+                            self.bc.emit(second_op((*tmp, val, MaybeImm::Imm(1))));
+                            self.store_place(place, *tmp, (*tmp).into());
                             self.free_reg(tmp);
                         }
                     }
-                    self.free_reg(rhs);
                 }
                 _ => todo!(),
             },
         }
     }
 
-    fn load_place(&mut self, dest: Reg, place: &Place<'_>) {
+    fn load_place(&mut self, dest: Reg, place: &Place<'_>) -> MaybeImm {
         match place {
             Place::Record(_) => {
                 todo!()
             }
             Place::Variable(Variable::User(ident)) => {
                 let src = self.symbols.register_user_var(ident, self.arena);
-                self.bc.emit(Instruction::LoadUserScalar((dest, src)));
+                MaybeImm::from_vs(self, dest, src)
             }
-            Place::Variable(var) => {
-                self.bc
-                    .emit(Instruction::LoadBuiltinScalar((dest, var_index(var))));
-            }
+            Place::Variable(var) => MaybeImm::from_is(self, dest, var),
             Place::Index(Variable::User(ident), index) => {
-                self.subsep_index(dest, index);
                 let src = self.symbols.register_user_var(ident, self.arena);
-                self.bc.emit(Instruction::LoadUserArray((dest, dest, src)));
+                let (start, end, _) = self.gen_call_convention(index, |_| ());
+                self.bc
+                    .emit(Instruction::LoadUserArray((dest, start, end, src)));
+                MaybeImm::Reg(dest)
             }
             Place::Index(var, index) => {
-                self.subsep_index(dest, index);
-                self.bc
-                    .emit(Instruction::LoadBuiltinArray((dest, dest, var_index(var))));
+                let (start, end, _) = self.gen_call_convention(index, |_| ());
+                self.bc.emit(Instruction::LoadBuiltinArray((
+                    dest,
+                    start,
+                    end,
+                    var_index(var),
+                )));
+                MaybeImm::Reg(dest)
             }
             Place::ChainedIndex(_, _) => todo!(),
         }
     }
 
-    fn store_place(&mut self, place: &Place<'_>, src: Reg) {
+    fn store_place(&mut self, place: &Place<'_>, dest: Reg, src: MaybeImm) {
         match place {
-            Place::Record(_) => todo!(),
+            Place::Record(expr) => {
+                let rec = self.lower_expr(expr);
+                self.bc
+                    .emit(Instruction::StoreRecord((dest, rec.to_mi(), src)));
+                rec.free(self);
+            }
             Place::Variable(Variable::User(ident)) => {
                 self.bc.emit(Instruction::StoreUserScalar((
+                    dest,
                     src,
                     self.symbols.register_user_var(ident, self.arena),
                 )));
             }
             Place::Variable(var) => {
                 self.bc
-                    .emit(Instruction::StoreBuiltinScalar((src, var_index(var))));
+                    .emit(Instruction::StoreBuiltinScalar((dest, src, var_index(var))));
             }
             Place::Index(Variable::User(ident), index) => {
-                let rhs = self.alloc_reg();
-                self.subsep_index(*rhs, index);
                 let place = self.symbols.register_user_var(ident, self.arena);
+                let (start, end, _) = self.gen_call_convention(index, |_| ());
                 self.bc
-                    .emit(Instruction::StoreUserArray((src, *rhs, place)));
-                self.free_reg(rhs);
+                    .emit(Instruction::StoreUserArray((dest, start, end, place)));
             }
             Place::Index(var, index) => {
-                let rhs = self.alloc_reg();
-                self.subsep_index(*rhs, index);
-                self.bc
-                    .emit(Instruction::StoreBuiltinArray((src, *rhs, var_index(var))));
-                self.free_reg(rhs);
+                let (start, end, _) = self.gen_call_convention(index, |_| ());
+                self.bc.emit(Instruction::StoreBuiltinArray((
+                    dest,
+                    start,
+                    end,
+                    var_index(var),
+                )));
             }
             Place::ChainedIndex(_, _) => todo!(),
         }
     }
 
-    fn subsep_index(&mut self, dest: Reg, index: &[Expr<'_>]) {
-        let rhs = self.alloc_reg();
-        self.lower_expr_into(&index[0], dest);
-        for i in &index[1..] {
-            self.lower_expr_into(i, *rhs);
-            self.bc.emit(Instruction::Concat((dest, dest, *rhs)));
-        }
-        self.free_reg(rhs);
-    }
-
     fn alloc_reg(&mut self) -> LinearReg {
         self.free_regs.pop().map(LinearReg).unwrap_or_else(|| {
             let current = self.reg_pointer;
-            self.reg_pointer += 1;
+            self.reg_pointer = self.reg_pointer.checked_add(1).expect("register overflow");
             LinearReg(Reg(current))
         })
     }
@@ -363,11 +400,15 @@ impl<'a> Code<'a> {
         RegsState::new(self)
             .scope(self, |this| {
                 let call_start = this.reg_pointer;
-                let call_end = call_start + args.len() as u16;
+                // TODO: Nicer error reporting.
+                let args_len: u8 = args.len().try_into().expect("too many call args");
+                let call_end = call_start.checked_add(args_len).expect("register overflow");
 
                 this.reg_pointer = call_end;
                 for (i, arg) in args.iter().enumerate() {
-                    this.lower_expr_into(arg, Reg(call_start + i as u16));
+                    let offset = i as u8;
+                    let reg = Reg(call_start.checked_add(offset).expect("register overflow"));
+                    this.lower_expr_into(arg, reg);
                 }
                 (Reg(call_start), Reg(call_end), extra(this))
             })
@@ -394,7 +435,7 @@ pub struct Bytecode<'a> {
 
 #[derive(Clone, Debug)]
 struct RegsState {
-    reg_pointer: u16,
+    reg_pointer: u8,
     n_free_regs: usize,
 }
 
@@ -500,6 +541,58 @@ impl LinearReg {
         let inner = self.0;
         forget(self);
         inner
+    }
+}
+
+impl Operand {
+    fn to_mi(&self) -> MaybeImm {
+        match self {
+            &Self::Imm(imm) => imm,
+            Self::Reg(reg) => reg.0.into(),
+        }
+    }
+
+    fn free(self, code: &mut Code) {
+        if let Self::Reg(reg) = self {
+            code.free_reg(reg);
+        }
+    }
+}
+
+impl MaybeImm {
+    fn from_vs(code: &mut Code<'_>, dest: Reg, src: NonLocal) -> Self {
+        if let Ok(src) = u8::try_from(src.0) {
+            Self::ImmUserVar(src)
+        } else {
+            code.bc.emit(Instruction::LoadUserScalar((dest, src)));
+            Self::Reg(dest)
+        }
+    }
+
+    fn from_is(code: &mut Code<'_>, dest: Reg, var: &Variable<'_>) -> Self {
+        let src = var_index(var);
+        if let Ok(src) = u8::try_from(src.0) {
+            Self::ImmBuiltinVar(src)
+        } else {
+            code.bc.emit(Instruction::LoadBuiltinScalar((dest, src)));
+            Self::Reg(dest)
+        }
+    }
+
+    fn from_cnt<'a>(code: &mut Code<'a>, dest: Reg, value: Value<'a>) -> Self {
+        let src = code.register_const(value);
+        if let Ok(src) = u8::try_from(src.0) {
+            Self::ImmCnt(src)
+        } else {
+            code.bc.emit(Instruction::LoadConst((dest, src)));
+            Self::Reg(dest)
+        }
+    }
+}
+
+impl From<Reg> for MaybeImm {
+    fn from(value: Reg) -> Self {
+        Self::Reg(value)
     }
 }
 

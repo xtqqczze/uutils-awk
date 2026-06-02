@@ -19,7 +19,7 @@ use parser::{Command, Identifier, Redirection};
 
 use crate::{
     ir::{
-        Instruction, Label, NonLocal, Reg,
+        Instruction, Label, MaybeImm, NonLocal, Reg,
         lower::{Bytecode, Code},
     },
     types::Value,
@@ -120,29 +120,38 @@ impl<'a> Consts<'a> {
 impl Interpreter<'_> {
     pub fn run(&mut self) {
         macro_rules! rx {
-            (self, $dest:expr, $src:ident, $e:expr) => {{
-                let $src = self.registers.get($src);
-                self.registers.write($dest, $e);
+            ($self:expr, $dest:expr, $src:ident, $e:expr) => {{
+                rx!($self, $src);
+                $self.registers.write($dest, $e);
             }};
-            (self, $lhs:ident, $rhs:ident) => {
-                let ($lhs, $rhs) = (self.registers.get($lhs), self.registers.get($rhs));
+            ($self:expr, $($src:ident),+) => {
+                $(let $src = match $src {
+                    MaybeImm::Reg(src) => $self.registers.get(src),
+                    MaybeImm::Rec(_) => todo!(),
+                    MaybeImm::Imm(src) => &Value::Int(src.into()),
+                    MaybeImm::ImmCnt(src) => &$self.consts.0.get_index(src as _).unwrap().clone(),
+                    MaybeImm::ImmUserVar(src) => {
+                        &$self.symbols.lookup_user_scalar(NonLocal(src.into())).clone()
+                    }
+                    MaybeImm::ImmBuiltinVar(_) => todo!(),
+                };)+
             };
-            (self, $dest:expr, $lhs:ident, $rhs:ident, $e:expr) => {{
-                rx!(self, $lhs, $rhs);
-                self.registers.write($dest, $e);
+            ($self:expr, $dest:expr, $lhs:ident, $rhs:ident, $e:expr) => {{
+                rx!($self, $lhs, $rhs);
+                $self.registers.write($dest, $e);
             }};
         }
         while let Some(&instr) = self.bc.code.get(self.program_counter) {
             match instr {
                 Instruction::Record(_) => todo!(),
                 Instruction::Negation((dest, src)) => {
-                    rx!(self, dest, src, Value::b2f(src.to_bool()));
+                    rx!(self, dest, src, Value::b2f(!src.to_bool()));
                 }
                 Instruction::ToInt((dest, src)) => {
-                    rx!(self, dest, src, Value::Float(src.to_num()));
+                    rx!(self, dest, src, Value::Float(src.to_num().trunc()));
                 }
                 Instruction::Negative((dest, src)) => {
-                    rx!(self, dest, src, Value::Float(src.to_num()));
+                    rx!(self, dest, src, Value::Float(-src.to_num()));
                 }
                 Instruction::Copy((dest, src)) => rx!(self, dest, src, src.clone()),
                 Instruction::Eq((dest, lhs, rhs)) => {
@@ -185,20 +194,24 @@ impl Interpreter<'_> {
                     let val = self.symbols.lookup_user_scalar(src);
                     self.registers.write(dest, val.clone());
                 }
-                Instruction::LoadUserArray((_dest, _src, _place)) => todo!(),
+                Instruction::LoadUserArray((_dest, _start, _end, _src)) => todo!(),
+                Instruction::LoadUserMDimArray((_dest, _start, _end, _place)) => todo!(),
                 Instruction::LoadBuiltinScalar((_dest, _src)) => todo!(),
-                Instruction::LoadBuiltinArray((_dest, _src, _place)) => todo!(),
+                Instruction::LoadBuiltinArray((_dest, _src, _start, _end)) => todo!(),
                 Instruction::LoadConst((dest, src)) => {
                     let val = self.consts.0.get_index(src.0 as _).unwrap().clone();
                     self.registers.write(dest, val);
                 }
-                Instruction::StoreUserScalar((dest, src)) => {
-                    let val = self.registers.get(dest).clone();
-                    self.symbols.write_user_val(src, val);
+                Instruction::StoreUserScalar((dest, imm, src)) => {
+                    rx!(self, imm);
+                    self.symbols.write_user_val(src, imm.clone());
+                    self.registers.write(dest, imm.clone());
                 }
-                Instruction::StoreUserArray((_dest, _src, _place)) => todo!(),
-                Instruction::StoreBuiltinScalar((_dest, _src)) => todo!(),
-                Instruction::StoreBuiltinArray((_dest, _src, _place)) => todo!(),
+                Instruction::StoreUserArray((_dest, _src, _start, _end)) => todo!(),
+                Instruction::StoreUserMDimArray((_dest, _start, _end, _place)) => todo!(),
+                Instruction::StoreRecord(_) => todo!(),
+                Instruction::StoreBuiltinScalar((_dest, _imm, _src)) => todo!(),
+                Instruction::StoreBuiltinArray((_dest, _src, _start, _end)) => todo!(),
                 Instruction::IntrinsicCall((_dest, _code, _args)) => todo!(),
                 Instruction::OutputCall((start, end, fun, redir)) => {
                     self.intrinsic_print(start, end, fun, redir);
@@ -211,7 +224,8 @@ impl Interpreter<'_> {
                 }
                 Instruction::Return(_src) => todo!(),
                 Instruction::Branch((src, Label(true_to), Label(false_to))) => {
-                    if self.registers.get(src).to_bool() {
+                    rx!(self, src);
+                    if src.to_bool() {
                         self.program_counter = true_to as _;
                     } else {
                         self.program_counter = false_to as _;

@@ -17,6 +17,7 @@ use hashbrown::HashMap;
 
 #[derive(Debug, Clone)]
 pub enum Value<'a> {
+    Int(isize),
     Float(f64),
     String(Cow<'a, [u8]>),
     Regex(Cow<'a, [u8]>),
@@ -52,6 +53,7 @@ impl Value<'_> {
     pub fn to_bool(&self) -> bool {
         match self {
             &Self::Float(f) => f != 0.,
+            &Self::Int(n) => n != 0,
             &Self::Bool(b) => b,
             Self::String(str) => !str.is_empty(),
             _ => false,
@@ -61,6 +63,7 @@ impl Value<'_> {
     pub fn to_num(&self) -> f64 {
         match self {
             &Self::Float(f) => f,
+            &Self::Int(n) => n as f64,
             &Self::Bool(b) => b as usize as f64,
             Self::String(s) => str::from_utf8(s)
                 .ok()
@@ -78,6 +81,7 @@ impl Value<'_> {
         match self {
             Self::String(s) | Self::Regex(s) => f.extend_from_slice(s),
             Self::Float(n) => write!(f, "{n}").unwrap(),
+            Self::Int(n) => write!(f, "{n}").unwrap(),
             &Self::Bool(false) => f.push(b'0'),
             &Self::Bool(true) => f.push(b'1'),
             Self::Array(_) => panic!("Attempted to use array in scalar context!"),
@@ -88,7 +92,7 @@ impl Value<'_> {
     pub fn string_size_hint(&self) -> usize {
         match self {
             Self::String(s) | Self::Regex(s) => s.len(),
-            Self::Float(_) => 8,
+            Self::Float(_) | Self::Int(_) => 8,
             Self::Bool(_) => 1,
             _ => 0,
         }
@@ -154,14 +158,23 @@ impl PartialEq for Value<'_> {
         match (self, other) {
             // Numeric comparisons
             (&Self::Float(lhs), &Self::Float(rhs)) => lhs == rhs,
+            (&Self::Int(lhs), &Self::Int(rhs)) => lhs == rhs,
+            (&Self::Int(lhs), &Self::Float(rhs)) | (&Self::Float(rhs), &Self::Int(lhs)) => {
+                rhs == lhs as f64
+            }
             (&Self::Bool(lhs), &Self::Bool(rhs)) => lhs == rhs,
             (&Self::Float(f), &Self::Bool(b)) | (&Self::Bool(b), &Self::Float(f)) => b && f == 1.,
+            (&Self::Int(f), &Self::Bool(b)) | (&Self::Bool(b), &Self::Int(f)) => b && f == 1,
             // String-based comparisons
             (Self::String(lhs) | Self::Regex(lhs), Self::String(rhs) | Self::Regex(rhs)) => {
                 lhs == rhs
             }
             (&Self::Float(f), Self::String(s) | Self::Regex(s))
             | (Self::String(s) | Self::Regex(s), &Self::Float(f)) => {
+                f.to_string().as_bytes() == s.as_ref()
+            }
+            (&Self::Int(f), Self::String(s) | Self::Regex(s))
+            | (Self::String(s) | Self::Regex(s), &Self::Int(f)) => {
                 f.to_string().as_bytes() == s.as_ref()
             }
             (&Self::Bool(b), Self::String(s) | Self::Regex(s))
@@ -185,9 +198,14 @@ impl PartialOrd for Value<'_> {
         match (self, other) {
             // Numeric comparisons
             (&Self::Float(lhs), Self::Float(rhs)) => lhs.partial_cmp(rhs),
+            (&Self::Int(lhs), Self::Int(rhs)) => lhs.partial_cmp(rhs),
+            (&Self::Int(lhs), Self::Float(rhs)) => (lhs as f64).partial_cmp(rhs),
+            (Self::Float(lhs), &Self::Int(rhs)) => lhs.partial_cmp(&(rhs as f64)),
             (&Self::Bool(lhs), Self::Bool(rhs)) => lhs.partial_cmp(rhs),
-            (&Self::Float(f), &Self::Bool(b)) => f.partial_cmp(&(b as usize as _)),
+            (&Self::Float(f), &Self::Bool(b)) => f.partial_cmp(&(b as usize as f64)),
             (&Self::Bool(b), Self::Float(f)) => (b as usize as f64).partial_cmp(f),
+            (&Self::Int(n), &Self::Bool(b)) => n.partial_cmp(&(b as isize)),
+            (&Self::Bool(b), Self::Int(f)) => (b as isize).partial_cmp(f),
             // String-based comparisons
             (Self::String(lhs) | Self::Regex(lhs), Self::String(rhs) | Self::Regex(rhs)) => {
                 lhs.as_ref().partial_cmp(rhs)
@@ -195,8 +213,14 @@ impl PartialOrd for Value<'_> {
             (&Self::Float(f), Self::String(s) | Self::Regex(s)) => {
                 f.to_string().as_bytes().partial_cmp(s)
             }
+            (&Self::Int(n), Self::String(s) | Self::Regex(s)) => {
+                n.to_string().as_bytes().partial_cmp(s)
+            }
             (Self::String(s) | Self::Regex(s), &Self::Float(f)) => {
                 s.as_ref().partial_cmp(f.to_string().as_bytes())
+            }
+            (Self::String(s) | Self::Regex(s), &Self::Int(n)) => {
+                s.as_ref().partial_cmp(n.to_string().as_bytes())
             }
             (&Self::Bool(b), Self::String(s) | Self::Regex(s)) => {
                 (if b { b"1" } else { b"0" }).as_ref().partial_cmp(s)
@@ -234,6 +258,7 @@ impl Hash for Value<'_> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         discriminant(self).hash(state);
         match self {
+            &Self::Int(n) => state.write_isize(n),
             Self::Float(f) => state.write_u64(f.to_bits()),
             Self::String(s) => s.hash(state),
             Self::Bool(b) => b.hash(state),
@@ -245,11 +270,12 @@ impl Hash for Value<'_> {
 impl Display for Value<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Value::Int(n) => <_ as Display>::fmt(n, f),
             Value::Float(n) => <_ as Display>::fmt(n, f),
             Value::String(s) => write!(f, "{}", String::from_utf8_lossy(s)),
             Value::Regex(s) => write!(f, "/{}/", String::from_utf8_lossy(s)),
             &Value::Bool(b) => write!(f, "{}", b as usize),
-            _ => Ok(()),
+            Value::Array(_) | Value::Untyped | Value::Unassigned => Ok(()),
         }
     }
 }
