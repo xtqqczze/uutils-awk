@@ -117,12 +117,16 @@ impl Instruction {
         }
     }
 
-    fn push_start_label(&mut self) {
-        if let Self::Branch((_, label, _)) = self {
+    fn push_end_label(&mut self) {
+        if let Self::Branch((_, _, label)) = self {
             label.0 += 1;
         } else {
             debug_assert!(false, "Incorrect label set!");
         }
+    }
+
+    fn br(cond: MaybeImm, then: Label) -> Self {
+        Self::Branch((cond, then, Label(0)))
     }
 }
 

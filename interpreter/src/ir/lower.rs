@@ -49,47 +49,26 @@ impl<'a> Code<'a> {
     fn lower_statement(&mut self, stmnt: &Statement) {
         match stmnt {
             Statement::If { condition, then_body, else_body } => {
-                let mut state = RegsState::new(self);
-                let condition = self.lower_expr(condition);
-                let label_then = self.following_instr(1);
-                let if_label = self.bc.emit(Instruction::Branch((
-                    condition.to_mi(),
-                    label_then,
-                    Label(0),
-                )));
-                condition.free(self);
-                self.lower_body(then_body);
-                let next = self.following_instr(0);
-                self.bc.nth(if_label).set_label(next);
+                let state = RegsState::new(self);
+                let (if_label, _) = self.emit_branch(condition, |this| this.lower_body(then_body));
 
                 if let Some(else_body) = else_body {
-                    state.reg_pointer =
-                        state.reg_pointer.checked_add(1).expect("register overflow");
-                    self.bc.nth(if_label).push_start_label();
-                    let end_label = self.bc.emit(Instruction::Jump(Label(0)));
-                    state.scope_hwm(self, |c| c.lower_body(else_body));
-                    let next = self.following_instr(0);
-                    self.bc.nth(end_label).set_label(next);
+                    self.bc.nth(if_label).push_end_label();
+                    self.emit_jump(|this| state.scope_hwm(this, |this| this.lower_body(else_body)));
                 }
             }
             Statement::While { condition, then_body } => {
                 let cond_label = self.following_instr(0);
-                let condition = self.lower_expr(condition);
-                let while_label = self.bc.emit(Instruction::Branch((
-                    condition.to_mi(),
-                    self.following_instr(1),
-                    Label(0),
-                )));
-                condition.free(self);
-                self.lower_body(then_body);
-                self.bc.emit(Instruction::Jump(cond_label));
-                let next = self.following_instr(0);
-                self.bc.nth(while_label).set_label(next);
+                self.emit_branch(condition, |this| {
+                    this.lower_body(then_body);
+                    this.bc.emit(Instruction::Jump(cond_label));
+                });
             }
             Statement::DoWhile { then_body, condition } => {
                 let do_label = self.following_instr(0);
                 self.lower_body(then_body);
                 let condition = self.lower_expr(condition);
+
                 self.bc.emit(Instruction::Branch((
                     condition.to_mi(),
                     do_label,
@@ -99,39 +78,28 @@ impl<'a> Code<'a> {
             }
             Statement::For { init, condition, update, body } => {
                 if let Some(SimpleStatement::Expression(expr)) = init {
-                    let value = self.lower_expr(expr);
-                    value.free(self);
+                    self.lower_expr(expr).free(self);
                 }
+
                 let cond_label = self.following_instr(0);
                 if let Some(condition) = condition {
-                    let condition = self.lower_expr(condition);
-                    let body_label = self.following_instr(1);
-                    let while_label = self.bc.emit(Instruction::Branch((
-                        condition.to_mi(),
-                        body_label,
-                        Label(0),
-                    )));
-                    condition.free(self);
-                    self.lower_body(body);
-                    if let Some(SimpleStatement::Expression(expr)) = update {
-                        let value = self.lower_expr(expr);
-                        value.free(self);
-                    }
-                    self.bc.emit(Instruction::Jump(cond_label));
-                    let next = self.following_instr(0);
-                    self.bc.nth(while_label).set_label(next);
+                    self.emit_branch(condition, |this| {
+                        this.lower_body(body);
+                        if let Some(SimpleStatement::Expression(expr)) = update {
+                            this.lower_expr(expr).free(this);
+                        }
+                        this.bc.emit(Instruction::Jump(cond_label));
+                    });
                 } else {
                     self.lower_body(body);
                     if let Some(SimpleStatement::Expression(expr)) = update {
-                        let value = self.lower_expr(expr);
-                        value.free(self);
+                        self.lower_expr(expr).free(self);
                     }
                     self.bc.emit(Instruction::Jump(cond_label));
                 }
             }
             Statement::Simple(SimpleStatement::Expression(expr)) => {
-                let value = self.lower_expr(expr);
-                value.free(self);
+                self.lower_expr(expr).free(self);
             }
             Statement::Simple(SimpleStatement::Command { name, args, redirection }) => {
                 let (call_start, call_end, redir) = self.gen_call_convention(args, |this| {
@@ -231,32 +199,21 @@ impl<'a> Code<'a> {
                     lhs.free(self);
                     rhs.free(self);
                 }
-                ExprNode::Ternary(cond, true_then, false_then) => {
-                    let cond = self.lower_expr(cond);
-                    let branch = self.bc.emit(Instruction::Branch((
-                        cond.to_mi(),
-                        self.following_instr(1),
-                        Label(0),
-                    )));
-                    cond.free(self);
-
-                    let mut state = RegsState::new(self);
-                    state = state
-                        .scope(self, |c| {
-                            c.lower_expr_into(true_then, dest);
-                        })
-                        .0;
-
-                    let jump = self.bc.emit(Instruction::Jump(Label(0)));
-                    let label = self.following_instr(0);
-
-                    state.scope_hwm(self, |c| {
-                        c.lower_expr_into(false_then, dest);
+                ExprNode::Ternary(condition, true_then, false_then) => {
+                    let (if_label, state) = self.emit_branch(condition, |this| {
+                        RegsState::new(this)
+                            .scope(this, |this| {
+                                this.lower_expr_into(true_then, dest);
+                            })
+                            .0
                     });
 
-                    self.bc.nth(branch).set_label(label);
-                    let next = self.following_instr(0);
-                    self.bc.nth(jump).set_label(next);
+                    self.bc.nth(if_label).push_end_label();
+                    self.emit_jump(|this| {
+                        state.scope_hwm(this, |this| {
+                            this.lower_expr_into(false_then, dest);
+                        });
+                    });
                 }
                 ExprNode::BinaryPlaceOperation(op, place, expr) => {
                     let val = self.lower_expr(expr);
@@ -334,12 +291,9 @@ impl<'a> Code<'a> {
             }
             Place::Index(var, index) => {
                 let (start, end, _) = self.gen_call_convention(index, |_| ());
-                self.bc.emit(Instruction::LoadBuiltinArray((
-                    dest,
-                    start,
-                    end,
-                    var_index(var),
-                )));
+                let index = var_index(var);
+                self.bc
+                    .emit(Instruction::LoadBuiltinArray((dest, start, end, index)));
                 MaybeImm::Reg(dest)
             }
             Place::ChainedIndex(_, _) => todo!(),
@@ -355,15 +309,13 @@ impl<'a> Code<'a> {
                 rec.free(self);
             }
             Place::Variable(Variable::User(ident)) => {
-                self.bc.emit(Instruction::StoreUserScalar((
-                    dest,
-                    src,
-                    self.symbols.register_user_var(ident, self.arena),
-                )));
+                let var = self.symbols.register_user_var(ident, self.arena);
+                self.bc.emit(Instruction::StoreUserScalar((dest, src, var)));
             }
             Place::Variable(var) => {
+                let index = var_index(var);
                 self.bc
-                    .emit(Instruction::StoreBuiltinScalar((dest, src, var_index(var))));
+                    .emit(Instruction::StoreBuiltinScalar((dest, src, index)));
             }
             Place::Index(Variable::User(ident), index) => {
                 let place = self.symbols.register_user_var(ident, self.arena);
@@ -373,15 +325,37 @@ impl<'a> Code<'a> {
             }
             Place::Index(var, index) => {
                 let (start, end, _) = self.gen_call_convention(index, |_| ());
-                self.bc.emit(Instruction::StoreBuiltinArray((
-                    dest,
-                    start,
-                    end,
-                    var_index(var),
-                )));
+                let index = var_index(var);
+                self.bc
+                    .emit(Instruction::StoreBuiltinArray((dest, start, end, index)));
             }
             Place::ChainedIndex(_, _) => todo!(),
         }
+    }
+
+    fn emit_branch<T>(
+        &mut self,
+        condition: &Expr<'_>,
+        cb: impl FnOnce(&mut Self) -> T,
+    ) -> (Label, T) {
+        let condition = self.lower_expr(condition);
+        let then_label = self.following_instr(1);
+        let if_label = self.bc.emit(Instruction::br(condition.to_mi(), then_label));
+        condition.free(self);
+
+        let res = cb(self);
+        let next = self.following_instr(0);
+        self.bc.nth(if_label).set_label(next);
+
+        (if_label, res)
+    }
+
+    fn emit_jump<T>(&mut self, cb: impl FnOnce(&mut Self) -> T) -> T {
+        let label = self.bc.emit(Instruction::Jump(Label(0)));
+        let res = cb(self);
+        let next = self.following_instr(0);
+        self.bc.nth(label).set_label(next);
+        res
     }
 
     fn alloc_reg(&mut self) -> LinearReg {
@@ -466,6 +440,7 @@ impl RegsState {
             n_free_regs: code.free_regs.len(),
         }
     }
+
     fn scope<T>(self, code: &mut Code, f: impl FnOnce(&mut Code) -> T) -> (Self, T) {
         let ret = f(code);
         let old = code.reg_pointer;
@@ -473,6 +448,7 @@ impl RegsState {
         code.free_regs.truncate(self.n_free_regs);
         (Self { reg_pointer: old, ..self }, ret)
     }
+
     fn scope_hwm<T>(self, code: &mut Code, f: impl FnOnce(&mut Code) -> T) {
         f(code);
         code.reg_pointer = code.reg_pointer.max(self.reg_pointer);
